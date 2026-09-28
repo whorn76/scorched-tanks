@@ -9,6 +9,7 @@ import { launchVector } from '../core/physics.js';
 import { planRound } from '../core/terrainGen.js';
 import { TICKS_PER_SECOND, clamp } from '../core/constants.js';
 import { FREE_WEAPON, WEAPON_BY_ID } from '../core/weapons.js';
+import { Brain } from '../ai/brain.js';
 import { freshSeed } from './seed.js';
 
 export const ROUND_SUMMARY_TICKS = TICKS_PER_SECOND * 4;
@@ -99,18 +100,25 @@ export class Session {
  * authority RNG (separate from the game's) and decides seeds, velocities and terrain.
  */
 export class AuthoritySession extends Session {
-  constructor({ settings, players, seed = freshSeed(), localPlayers = [] }) {
+  constructor({ settings = null, players = null, seed = freshSeed(), localPlayers = [], aiFast = false } = {}) {
     super();
     this.isAuthority = true;
     this.rng = new Rng(seed);
-    this.game = Game.create({ settings, players });
     this.seq = 0; // number of commands applied; guests use it to order and resync
     this.flowPhase = null;
     this.flowTimer = 0;
-    this.brain = null; // AI controller, attached by the AI module
     this.started = false;
-    this.skipShopUi = false; // demo games shop instantly
+    this.brain = new Brain(this, { seed: this.rng.nextU32(), fast: aiFast });
     for (const id of localPlayers) this.localPlayers.add(id);
+    if (players) this.setupGame(settings, players);
+  }
+
+  setupGame(settings, players) {
+    this.game = Game.create({ settings, players });
+    this.flowPhase = null;
+    this.flowTimer = 0;
+    this.ready.clear();
+    return this.game;
   }
 
   /** Begins play: the first shop (with starting cash) or straight into round 1. */
@@ -210,6 +218,7 @@ export class AuthoritySession extends Session {
   /** One fixed step: simulation, then round flow, AI and the turn timer. */
   update() {
     this.ticks++;
+    if (!this.game) return;
     const wasBusy = this.game.phase === Phase.BUSY;
     this.game.tick();
     this.collectGameEvents();
