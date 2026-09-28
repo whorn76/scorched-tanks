@@ -36,6 +36,7 @@ import {
   HIT_NONE,
   HIT_SHIELD,
   HIT_TANK,
+  HIT_TERRAIN,
   HIT_WALL,
   barrelTip,
   distanceToTank,
@@ -480,10 +481,21 @@ export class Game {
   }
 
   updateProjectile(p) {
+    if (p.mode === 'roll') {
+      this.updateRoller(p);
+      return;
+    }
+    if (p.mode === 'dig') {
+      this.updateDigger(p);
+      return;
+    }
     const code = stepProjectile(p, this.env);
-    if (code === HIT_NONE) return;
-    p.dead = true;
+    if (code === HIT_NONE) {
+      if (p.kind === 'mirv' && p.vy >= 0) this.splitMirv(p);
+      return;
+    }
     if (code === HIT_LOST) {
+      p.dead = true;
       this.emit({ type: 'lost', x: p.x, y: p.y });
       return;
     }
@@ -494,16 +506,94 @@ export class Game {
   impact(p, code) {
     const s = this.state;
     const weapon = WEAPON_BY_ID[p.weapon];
-    if (!p.child && s.lastShot && !s.lastShot.impact) s.lastShot.impact = { x: p.x, y: p.y, tank: p.hitTank };
+    const direct = code === HIT_TANK || code === HIT_SHIELD;
+    if (!p.child && s.lastShot && !s.lastShot.impact) s.lastShot.impact = { x: p.x, y: p.y, tank: direct ? p.hitTank : -1 };
     if (code === HIT_SHIELD) this.emit({ type: 'shieldHit', tank: p.hitTank, x: p.x, y: p.y });
-    if (code === HIT_TANK || code === HIT_SHIELD) this.emit({ type: 'directHit', tank: p.hitTank });
+    if (direct) this.emit({ type: 'directHit', tank: p.hitTank });
     if (code === HIT_WALL) this.emit({ type: 'wallHit', x: p.x, y: p.y });
+    const radius = p.radius ?? weapon.radius;
+    const damage = p.damage ?? weapon.damage;
     switch (p.kind) {
       case 'tracer':
+        p.dead = true;
         this.emit({ type: 'tracerEnd', x: p.x, y: p.y });
+        return;
+      case 'roller':
+        if (code === HIT_TERRAIN) {
+          this.startRolling(p);
+          return;
+        }
         break;
-      default:
-        this.explode(p.x, p.y, weapon.radius, weapon.damage, p.owner, { flash: !!weapon.flash });
+      case 'digger':
+        if (code === HIT_TERRAIN) {
+          this.startDigging(p, weapon);
+          return;
+        }
+        break;
+      case 'napalm':
+        p.dead = true;
+        this.spawnNapalm(p, weapon);
+        return;
+      case 'dirt': {
+        p.dead = true;
+        const added = this.terrain.addDirt(p.x, p.y, weapon.radius, s.rng.nextU32());
+        this.emit({ type: 'dirt', x: p.x, y: p.y, radius: weapon.radius, added });
+        return;
+      }
+      case 'funky':
+        p.dead = true;
+        this.explode(p.x, p.y, radius, damage, p.owner, { then: { kind: 'funky', weapon: weapon.id } });
+        return;
+      case 'leapfrog': {
+        p.dead = true;
+        const hops = (p.hops ?? weapon.hops) - 1;
+        const then = hops > 0 ? { kind: 'leap', weapon: weapon.id, hops, vx: p.vx * 0.72, vy: -Math.max(230, Math.abs(p.vy) * 0.62) } : null;
+        this.explode(p.x, p.y, radius, damage, p.owner, { then });
+        return;
+      }
+    }
+    p.dead = true;
+    this.explode(p.x, p.y, radius, damage, p.owner, { flash: !!weapon.flash && !p.child });
+  }
+
+  splitMirv(p) {
+    const weapon = WEAPON_BY_ID[p.weapon];
+    const mid = (weapon.warheads - 1) / 2;
+    for (let i = 0; i < weapon.warheads; i++) {
+      this.spawnShell(weapon, p.owner, p.x, p.y, p.vx + (i - mid) * weapon.spread, p.vy, {
+        kind: 'warhead',
+        child: true,
+        armed: true,
+        radius: weapon.radius,
+        damage: weapon.damage,
+      });
+    }
+    p.dead = true;
+    this.emit({ type: 'split', x: p.x, y: p.y, count: weapon.warheads });
+  }
+
+  /** Follow-ups that start once a blast has dug its crater: bomblets and leapfrog hops. */
+  afterBlast(e) {
+    const then = e.then;
+    const s = this.state;
+    const weapon = WEAPON_BY_ID[then.weapon];
+    if (then.kind === 'funky') {
+      for (let i = 0; i < weapon.bomblets; i++) {
+        const vx = s.rng.range(-290, 290);
+        const vy = s.rng.range(-560, -230);
+        this.spawnShell(weapon, e.owner, e.x, e.y - 2, vx, vy, {
+          kind: 'warhead',
+          child: true,
+          armed: true,
+          radius: weapon.bombletRadius,
+          damage: weapon.bombletDamage,
+          funky: true,
+        });
+      }
+      this.emit({ type: 'split', x: e.x, y: e.y, count: weapon.bomblets });
+    } else if (then.kind === 'leap') {
+      this.spawnShell(weapon, e.owner, e.x, e.y - 3, then.vx, then.vy, { child: true, armed: true, hops: then.hops });
+      this.emit({ type: 'bounce', x: e.x, y: e.y });
     }
   }
 
@@ -514,9 +604,272 @@ export class Game {
     this.emit({ type: 'riot', tank: tank.id, x: cx, y: cy, radius: weapon.radius, material: result.material });
   }
 
+  // --- Rollers -------------------------------------------------------------------------------
+
+  /** Row of the first solid pixel in column x within ±range of y (y + range + 1 if none). */
+  surfaceNear(x, y, range = 8) {
+    for (let r = y - range; r <= y + range; r++) if (this.terrain.isSolid(x, r)) return r;
+    return y + range + 1;
+  }
+
+  startRolling(p) {
+    const t = this.terrain;
+    const x = Math.max(0, Math.min(WIDTH - 1, Math.floor(p.x)));
+    let y = Math.floor(p.y);
+    while (y > 0 && t.isSolid(x, y)) y--;
+    const left = this.surfaceNear(x - 4, y);
+    const right = this.surfaceNear(x + 4, y);
+    p.mode = 'roll';
+    p.x = x;
+    p.y = y;
+    p.dir = left > right ? -1 : right > left ? 1 : p.vx < 0 ? -1 : 1;
+    p.speed = clamp(Math.abs(p.vx) * DT * 0.45 + 0.7, 0.7, 3.5);
+    p.acc = 0;
+    p.rollAge = p.rollAge ?? 0;
+    p.turns = p.turns ?? 0;
+    this.emit({ type: 'roll', x, y });
+  }
+
+  rollerHitsTank(x, y) {
+    for (const tank of this.state.tanks) {
+      if (!tank.alive) continue;
+      if (Math.abs(x - tank.x) <= TANK.hitHalfWidth + 2 && y >= tank.y - TANK.hitTop - 3 && y <= tank.y + 3) return true;
+    }
+    return false;
+  }
+
+  rollerBoom(p) {
+    const weapon = WEAPON_BY_ID[p.weapon];
+    p.dead = true;
+    this.explode(p.x, p.y - 3, weapon.radius, weapon.damage, p.owner);
+  }
+
+  updateRoller(p) {
+    const t = this.terrain;
+    p.rollAge++;
+    if (p.rollAge > 60 * 9) return this.rollerBoom(p);
+    p.acc += p.speed;
+    while (p.acc >= 1) {
+      p.acc -= 1;
+      let nx = p.x + p.dir;
+      if (nx < 0 || nx >= WIDTH) {
+        const walls = this.env.walls;
+        if (walls === 'wrap') nx = (nx + WIDTH) % WIDTH;
+        else if (walls === 'rubber') {
+          p.dir = -p.dir;
+          continue;
+        } else if (walls === 'concrete') return this.rollerBoom(p);
+        else {
+          p.dead = true;
+          this.emit({ type: 'lost', x: p.x, y: p.y });
+          return;
+        }
+      }
+      if (this.rollerHitsTank(nx, p.y)) {
+        p.x = nx;
+        return this.rollerBoom(p);
+      }
+      let ny = p.y;
+      if (t.isSolid(nx, ny)) {
+        let up = 0;
+        while (up < 4 && t.isSolid(nx, ny - up)) up++;
+        if (up >= 4) {
+          // A wall: bounce back with less speed.
+          p.dir = -p.dir;
+          p.speed *= 0.5;
+          p.turns++;
+          if (p.turns > 3 || p.speed < 0.2) return this.rollerBoom(p);
+          continue;
+        }
+        ny -= up;
+        p.speed -= up * 0.3;
+      } else {
+        let down = 0;
+        while (down < 5 && !t.isSolid(nx, ny + 1 + down)) down++;
+        if (down >= 5) {
+          // Off a ledge: fly again, and roll on when it lands.
+          p.x = nx;
+          p.y = ny;
+          p.mode = 'fly';
+          p.vx = p.dir * Math.max(40, p.speed * 60);
+          p.vy = 20;
+          p.armed = true;
+          return;
+        }
+        ny += down;
+        p.speed += down * 0.25;
+      }
+      p.x = nx;
+      p.y = ny;
+      p.speed = Math.min(6, p.speed - 0.015);
+      if (p.speed <= 0.05) {
+        // Stopped. Roll back if the other way is downhill, otherwise go off.
+        const back = this.surfaceNear(p.x - p.dir * 3, p.y);
+        if (back > p.y + 1 && p.turns < 2) {
+          p.dir = -p.dir;
+          p.speed = 0.35;
+          p.turns++;
+        } else {
+          return this.rollerBoom(p);
+        }
+      }
+    }
+  }
+
+  // --- Diggers -------------------------------------------------------------------------------
+
+  startDigging(p, weapon) {
+    const speed = Math.sqrt(p.vx * p.vx + p.vy * p.vy) || 1;
+    let dx = p.vx / speed;
+    let dy = p.vy / speed;
+    if (dy < 0.4) dy = 0.4;
+    const len = Math.sqrt(dx * dx + dy * dy);
+    dx /= len;
+    dy /= len;
+    const extra = { mode: 'dig', left: weapon.tunnel, air: 0, child: true, armed: true };
+    p.mode = 'dig';
+    p.dx = dx;
+    p.dy = dy;
+    p.left = weapon.tunnel;
+    p.air = 0;
+    if (weapon.burrowers > 1) {
+      // Fan the others out by ±26° (cos/sin precomputed so no trig runs here).
+      const c = 0.898794046299167;
+      const sn = 0.4383711467890774;
+      this.spawnShell(weapon, p.owner, p.x, p.y, 0, 0, { ...extra, dx: dx * c - dy * sn, dy: Math.max(0.25, dx * sn + dy * c) });
+      this.spawnShell(weapon, p.owner, p.x, p.y, 0, 0, { ...extra, dx: dx * c + dy * sn, dy: Math.max(0.25, -dx * sn + dy * c) });
+    }
+    this.emit({ type: 'dig', x: p.x, y: p.y });
+  }
+
+  updateDigger(p) {
+    const t = this.terrain;
+    const weapon = WEAPON_BY_ID[p.weapon];
+    const boom = () => {
+      p.dead = true;
+      this.explode(p.x, p.y, weapon.radius, weapon.damage, p.owner);
+    };
+    for (let i = 0; i < 3; i++) {
+      p.x += p.dx;
+      p.y += p.dy;
+      p.left--;
+      if (p.x < 1 || p.x >= WIDTH - 1 || p.y >= HEIGHT - 2 || p.left <= 0) return boom();
+      // Look past the tunnel it's cutting to tell whether it's still in the ground.
+      if (t.isSolid(p.x + p.dx * 7, p.y + p.dy * 7)) p.air = 0;
+      else if (++p.air > 8) return boom();
+      if ((p.left & 1) === 0) t.carve(p.x, p.y, 5, 0);
+      for (const tank of this.state.tanks) {
+        if (tank.alive && distanceToTank(tank, p.x, p.y) < 2) return boom();
+      }
+    }
+  }
+
+  // --- Napalm --------------------------------------------------------------------------------
+
+  spawnNapalm(p, weapon) {
+    const s = this.state;
+    for (let i = 0; i < weapon.particles; i++) {
+      s.napalm.push({
+        x: p.x + s.rng.range(-4, 4),
+        y: p.y - 2 - s.rng.range(0, 4),
+        vx: s.rng.range(-2.2, 2.2),
+        vy: s.rng.range(-3.4, -0.6),
+        life: Math.round(weapon.burn * s.rng.range(0.7, 1.15)),
+        heat: weapon.heat,
+        owner: p.owner,
+        flow: false,
+        spread: 40,
+        side: i & 1 ? 1 : -1,
+      });
+    }
+    this.emit({ type: 'napalm', x: p.x, y: p.y, heat: weapon.heat });
+  }
+
+  updateNapalm() {
+    const s = this.state;
+    const list = s.napalm;
+    if (!list.length) return;
+    const t = this.terrain;
+    const occupied = new Set();
+    for (const n of list) if (n.flow) occupied.add(n.y * WIDTH + n.x);
+    const free = (x, y) => x >= 0 && x < WIDTH && y < HEIGHT && !t.isSolid(x, y) && !occupied.has(y * WIDTH + x);
+    for (const n of list) {
+      n.life--;
+      if (!n.flow) {
+        n.vy += 0.16;
+        const steps = Math.max(1, Math.ceil(Math.max(Math.abs(n.vx), Math.abs(n.vy))));
+        for (let k = 0; k < steps; k++) {
+          const nx = n.x + n.vx / steps;
+          const ny = n.y + n.vy / steps;
+          if (nx < 0 || nx >= WIDTH) {
+            n.life = 0;
+            break;
+          }
+          if (ny >= HEIGHT - 1 || t.isSolid(nx, ny)) {
+            n.flow = true;
+            n.x = Math.floor(n.x);
+            n.y = Math.min(HEIGHT - 1, Math.floor(n.y));
+            occupied.add(n.y * WIDTH + n.x);
+            break;
+          }
+          n.x = nx;
+          n.y = ny;
+        }
+      } else if (t.isSolid(n.x, n.y)) {
+        n.life = 0; // smothered by falling dirt
+      } else {
+        const { x, y } = n;
+        let tx = x;
+        let ty = y;
+        if (free(x, y + 1)) ty = y + 1;
+        else if (free(x + n.side, y + 1)) {
+          tx = x + n.side;
+          ty = y + 1;
+        } else if (free(x - n.side, y + 1)) {
+          tx = x - n.side;
+          ty = y + 1;
+        } else if (n.spread > 0 && free(x + n.side, y)) {
+          tx = x + n.side;
+          n.spread--;
+        } else {
+          n.side = -n.side;
+        }
+        if (tx !== x || ty !== y) {
+          occupied.delete(y * WIDTH + x);
+          occupied.add(ty * WIDTH + tx);
+          n.x = tx;
+          n.y = ty;
+        }
+      }
+      if (n.life <= 0 && n.flow) t.scorch(n.x, n.y + 1);
+    }
+    s.napalm = list.filter((n) => n.life > 0);
+    // Burn tanks standing in the fire: at most ten flames count at once.
+    for (const tank of s.tanks) {
+      if (!tank.alive) continue;
+      let heat = 0;
+      let count = 0;
+      let owner = -1;
+      for (const n of s.napalm) {
+        if (Math.abs(n.x - tank.x) <= TANK.halfWidth + 3 && n.y >= tank.y - TANK.hitTop - 4 && n.y <= tank.y + 3) {
+          if (count < 10) heat += n.heat;
+          if (owner < 0) owner = n.owner;
+          count++;
+        }
+      }
+      if (!count) continue;
+      tank.burn += heat * 0.02;
+      if (tank.burn >= 1) {
+        const dmg = Math.floor(tank.burn);
+        tank.burn -= dmg;
+        this.damageTank(tank, dmg, owner);
+      }
+    }
+  }
+
   // --- Explosions ----------------------------------------------------------------------------
 
-  explode(x, y, radius, damage, owner, { flash = false, kind = 'blast', carve = true } = {}) {
+  explode(x, y, radius, damage, owner, { flash = false, kind = 'blast', carve = true, then = null } = {}) {
     const e = {
       x,
       y,
@@ -529,6 +882,7 @@ export class Game {
       flash,
       kind,
       carve,
+      then,
     };
     this.state.explosions.push(e);
     this.emit({ type: 'explosion', x, y, radius, flash, kind });
@@ -562,6 +916,7 @@ export class Game {
       if (d >= e.radius || e.damage <= 0) continue;
       this.damageTank(tank, Math.round(e.damage * (1 - (0.7 * d) / e.radius)), e.owner);
     }
+    if (e.then) this.afterBlast(e);
   }
 
   // --- Damage and money ----------------------------------------------------------------------
@@ -741,6 +1096,7 @@ export class Game {
     s.tick++;
     this.updateProjectiles();
     this.updateExplosions();
+    this.updateNapalm();
     this.terrain.settleStep();
     this.updateTanks();
     if (this.isQuiet()) {

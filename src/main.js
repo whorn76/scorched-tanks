@@ -15,7 +15,8 @@ import { h } from './ui/dom.js';
 import * as screens from './ui/screens.js';
 import { Lobby, hostScreen, joinScreen, waitingScreen } from './ui/online.js';
 import { ChatBox } from './ui/chat.js';
-import { loadLineup, loadMuted, loadOnline, loadSettings, saveLineup, saveMuted, saveOnline } from './storage.js';
+import { Shop } from './ui/shop.js';
+import { loadLineup, loadMuted, loadOnline, loadSettings, saveLineup, saveMuted, saveOnline, saveSettings } from './storage.js';
 
 const canvas = document.getElementById('game');
 const uiRoot = document.getElementById('ui');
@@ -80,7 +81,7 @@ function menuOverlay() {
         onLocal: () => go('setup'),
         onHost: () => go('host'),
         onJoin: () => go('join'),
-        onSettings: () => toast('The settings screen arrives in the next update.'),
+        onSettings: () => openSettings('title'),
         onHelp: () => go('help'),
       })];
     case 'setup':
@@ -90,7 +91,10 @@ function menuOverlay() {
         onChange: () => saveLineup(app.lineup),
         onStart: startLocalGame,
         onBack: () => go('title'),
+        onSettings: () => openSettings('setup'),
       })];
+    case 'settings':
+      return ['settings', () => screens.settingsScreen(app.settings, { onChange: settingsChanged, onClose: () => go(app.settingsBack ?? 'title') })];
     case 'help':
       return ['help', () => screens.helpScreen({ onClose: () => go('title') })];
     case 'host':
@@ -140,17 +144,37 @@ function gameOverlay() {
   }
   const game = session.game;
   if (app.modal === 'help') return ['game-help', () => screens.helpScreen({ onClose: () => (app.modal = null) }), true];
+  if (app.modal === 'settings') {
+    return ['game-settings', () => screens.settingsScreen(app.settings, { personalOnly: true, onChange: settingsChanged, onClose: () => (app.modal = 'pause') }), true];
+  }
   if (app.modal === 'pause') {
     return [`pause:${app.muted}`, () => screens.pauseScreen({
       online: session.online,
       muted: app.muted,
       onResume: closeModal,
       onMute: toggleMute,
+      onSettings: () => (app.modal = 'settings'),
       onHelp: () => (app.modal = 'help'),
       onQuit: quitToTitle,
     }), true];
   }
   switch (game.phase) {
+    case Phase.SHOP: {
+      const shopper = session.localShoppers()[0];
+      if (shopper === undefined) {
+        app.shop = null;
+        return ['shop-wait', () => waitingScreen('Waiting…', 'The other players are still shopping.', null), true];
+      }
+      const key = `shop:${game.state.round}:${shopper}`;
+      if (app.shop?.key !== key) {
+        app.shop = new Shop(session, {
+          getTankId: () => session.localShoppers()[0] ?? -1,
+          onDone: (id) => session.submit({ type: 'ready', playerId: id }),
+        });
+        app.shop.key = key;
+      }
+      return [key, () => app.shop.el, true];
+    }
     case Phase.ROUND_OVER:
       return [`round:${game.state.round}`, () => screens.roundSummary(game), false];
     case Phase.GAME_OVER:
@@ -164,12 +188,23 @@ function syncOverlay() {
   const [key, build, dim] = app.session ? gameOverlay() : menuOverlay();
   setOverlay(key, build, { dim });
   if (key === 'lobby') app.lobby?.update();
+  if (key?.startsWith('shop:')) app.shop?.update();
   const online = !!app.session?.online && app.session.status !== 'ended';
   chat.show(online, online && app.session.status === 'lobby');
 }
 
 function go(screen) {
   app.screen = screen;
+}
+
+function openSettings(back) {
+  app.settingsBack = back;
+  go('settings');
+}
+
+function settingsChanged(settings) {
+  app.settings = settings;
+  saveSettings(settings);
 }
 
 function closeModal() {
@@ -501,10 +536,6 @@ function handleEvents(session) {
     switch (event.type) {
       case 'turn':
         app.noFuelWarned = false;
-        break;
-      case 'shop':
-        // Until the shop screen exists, humans skip straight to the next round.
-        for (const id of session.localShoppers()) session.submit({ type: 'ready', playerId: id });
         break;
       case 'chat':
         chat.add(event);

@@ -3,6 +3,7 @@
 import { AI_CHOICES, MAX_TANKS, MIN_TANKS, TANK_COLORS } from '../core/constants.js';
 import { ITEMS, WEAPONS } from '../core/weapons.js';
 import { h, money, select } from './dom.js';
+import { GAMEPLAY_KEYS, PERSONAL_KEYS, settingsForm } from './settingsForm.js';
 
 export const AI_LABELS = {
   rookie: 'AI · Rookie',
@@ -110,7 +111,7 @@ export function localSetupScreen({ lineup, allowAi, onChange, onStart, onBack, o
     'div',
     { class: 'panel', id: 'local-setup' },
     h('h2', { text: 'Local Game' }),
-    h('p', { class: 'hint', text: 'Two to six tanks. Humans take turns at this keyboard.' }),
+    h('p', { class: 'hint', text: 'Two to six tanks. Humans take turns at this keyboard; AI tanks play themselves.' }),
     lineupEditor(lineup, { onChange, allowAi }),
     h('div', { class: 'row end' },
       onSettings ? h('button', { class: 'btn', onclick: onSettings, text: 'Settings' }) : null,
@@ -129,7 +130,7 @@ export function pauseScreen({ online, onResume, onHelp, onSettings, onQuit, mute
     h('div', { class: 'menu' },
       h('button', { class: 'btn primary', onclick: onResume, text: 'Resume' }),
       h('button', { class: 'btn', onclick: onMute, text: muted ? 'Sound: off' : 'Sound: on' }),
-      onSettings ? h('button', { class: 'btn', onclick: onSettings, text: 'Sound & display' }) : null,
+      onSettings ? h('button', { class: 'btn', onclick: onSettings, text: 'Sound & talk' }) : null,
       h('button', { class: 'btn', onclick: onHelp, text: 'How to play' }),
       h('button', { class: 'btn danger', onclick: onQuit, text: online ? 'Leave game' : 'Quit to title' })),
   );
@@ -224,4 +225,16 @@ export function messageScreen({ title, text, onOk, okText = 'OK' }) {
     h('h2', { text: title }),
     h('p', { text }),
     h('div', { class: 'row end' }, h('button', { class: 'btn primary', onclick: onOk, text: okText })));
+}
+
+/** Settings. `personalOnly` shows just sound and talk (inside a running game). */
+export function settingsScreen(settings, { onChange, onClose, personalOnly = false }) {
+  return h('div', { class: 'panel', id: 'settings-screen' },
+    h('h2', { text: personalOnly ? 'Sound & display' : 'Settings' }),
+    personalOnly ? null : h('h3', { text: 'Battle' }),
+    personalOnly ? null : settingsForm(settings, { keys: GAMEPLAY_KEYS, onChange }),
+    h('h3', { text: 'Personal' }),
+    settingsForm(settings, { keys: PERSONAL_KEYS, onChange }),
+    personalOnly ? null : h('p', { class: 'hint', text: 'Online, the host’s battle settings apply to everyone.' }),
+    h('div', { class: 'row end' }, h('button', { class: 'btn primary', id: 'btn-settings-done', onclick: onClose, text: 'Done' })));
 }

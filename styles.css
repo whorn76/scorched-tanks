@@ -16,6 +16,10 @@
   box-sizing: border-box;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 html,
 body {
   margin: 0;
@@ -76,7 +80,6 @@ canvas {
   max-height: calc(100vh - 32px);
   overflow: auto;
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.06);
-  backdrop-filter: blur(6px);
   animation: pop 0.18s ease-out;
 }
 
@@ -133,7 +136,7 @@ canvas {
 .title-panel {
   width: min(520px, 100%);
   text-align: center;
-  background: rgba(10, 14, 26, 0.72);
+  background: rgba(10, 14, 26, 0.8);
 }
 
 .logo {
@@ -683,4 +686,138 @@ td.money {
 .chat-input {
   width: 100%;
   background: rgba(8, 12, 22, 0.9);
+}
+
+/* --- Shop ----------------------------------------------------------------------------------- */
+
+.shop-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.shop-purse {
+  text-align: right;
+}
+
+.shop-who {
+  font-weight: 700;
+  font-size: 16px;
+}
+
+.shop-cash {
+  font: 800 28px var(--display);
+  color: var(--good);
+}
+
+.shop-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+  gap: 18px;
+  max-height: calc(100vh - 230px);
+  overflow: auto;
+}
+
+@media (max-width: 860px) {
+  .shop-body {
+    grid-template-columns: 1fr;
+  }
+}
+
+.shop-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.shop-row {
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr) auto 38px auto auto;
+  gap: 8px;
+  align-items: center;
+  padding: 5px 8px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.shop-row:hover {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.shop-icon {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  box-shadow: 0 0 8px currentColor;
+}
+
+.shop-name {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.shop-name strong {
+  font-size: 14px;
+}
+
+.shop-name small {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.shop-price {
+  font-size: 13px;
+  color: #ffe2a8;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.shop-owned {
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--accent-2);
+  text-align: right;
+}
+
+.shop-ready {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.ready-pill {
+  font-size: 13px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--muted);
+}
+
+.ready-pill.ready {
+  background: rgba(141, 255, 154, 0.16);
+  color: var(--good);
+}
+
+#settings-screen .settings-grid {
+  grid-template-columns: auto minmax(0, 1fr) auto minmax(0, 1fr);
+  gap: 7px 14px;
+}
+
+#settings-screen .settings-grid select {
+  padding: 6px 8px;
+}
+
+@media (max-width: 760px) {
+  #settings-screen .settings-grid {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+}
+
+#settings-screen {
+  width: min(820px, 100%);
 }

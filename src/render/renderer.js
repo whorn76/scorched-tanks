@@ -5,6 +5,7 @@
 import { HEIGHT, MAX_POWER, TANK, WIDTH, WIND_MAX } from '../core/constants.js';
 import { Phase, maxPower } from '../core/game.js';
 import { FREE_WEAPON, WEAPON_BY_ID } from '../core/weapons.js';
+import { LOOSE } from '../core/terrain.js';
 import { buildPalette, hexToRgb } from './palette.js';
 import { TerrainLayer } from './terrainLayer.js';
 import { Sky } from './sky.js';
@@ -143,6 +144,22 @@ export class Renderer {
       }
       case 'round':
         this.resetRound();
+        break;
+      case 'dirt': {
+        const color = this.palette?.css[LOOSE + 4] ?? '#8f6436';
+        fx.debris(event.x, event.y, event.radius * 0.6, color, 40);
+        fx.shake(event.radius / 16);
+        break;
+      }
+      case 'split':
+        fx.sparkle(event.x, event.y, '255,240,180', 20);
+        break;
+      case 'bounce':
+        fx.sparkle(event.x, event.y, '160,255,170', 10);
+        break;
+      case 'napalm':
+        fx.sparkle(event.x, event.y, '255,150,40', 30);
+        fx.shake(3);
         break;
       case 'tracerEnd':
         break;
@@ -309,22 +326,69 @@ export class Renderer {
 
   drawProjectiles(ctx, s, time) {
     for (const p of s.projectiles) {
+      if (p.mode === 'roll') {
+        this.drawRoller(ctx, p, time);
+        continue;
+      }
+      if (p.mode === 'dig') {
+        this.drawDigger(ctx, p);
+        continue;
+      }
       const weapon = WEAPON_BY_ID[p.weapon];
       const big = weapon?.radius >= 55 || p.kind === 'mirv';
       const r = p.child ? 2.4 : big ? 4.2 : 3;
       const glow = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r * 3.5);
-      const hue = p.kind === 'funky' ? `hsla(${Math.round((time * 400 + p.id * 70) % 360)},100%,65%,` : p.kind === 'napalm' ? 'rgba(255,140,40,' : p.kind === 'tracer' ? 'rgba(120,255,170,' : 'rgba(255,230,170,';
+      const hue = p.funky || p.kind === 'funky'
+        ? `hsla(${Math.round((time * 400 + p.id * 70) % 360)},100%,65%,`
+        : p.kind === 'napalm' ? 'rgba(255,140,40,' : p.kind === 'tracer' ? 'rgba(120,255,170,' : p.kind === 'dirt' ? 'rgba(200,150,90,' : 'rgba(255,230,170,';
       glow.addColorStop(0, `${hue}0.9)`);
       glow.addColorStop(1, `${hue}0)`);
       ctx.fillStyle = glow;
       ctx.beginPath();
       ctx.arc(p.x, p.y, r * 3.5, 0, TAU);
       ctx.fill();
-      ctx.fillStyle = p.mode === 'dig' ? '#c9a27a' : '#fff8e8';
+      ctx.fillStyle = p.kind === 'dirt' ? '#b98a55' : '#fff8e8';
       ctx.beginPath();
-      ctx.arc(p.x, p.y, r, 0, TAU);
+      ctx.arc(p.x, p.y, p.kind === 'dirt' ? r + 1.5 : r, 0, TAU);
       ctx.fill();
     }
+  }
+
+  drawRoller(ctx, p, time) {
+    const heavy = p.weapon === 'heavyroller';
+    const r = heavy ? 5 : 4;
+    const x = p.x;
+    const y = p.y - r + 1;
+    ctx.fillStyle = heavy ? '#5a6275' : '#8a93a8';
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, TAU);
+    ctx.fill();
+    ctx.strokeStyle = '#dfe6f3';
+    ctx.lineWidth = 1.2;
+    const spin = (x / r) * p.dir;
+    ctx.beginPath();
+    ctx.moveTo(x + Math.cos(spin) * r, y + Math.sin(spin) * r);
+    ctx.lineTo(x - Math.cos(spin) * r, y - Math.sin(spin) * r);
+    ctx.stroke();
+    ctx.fillStyle = `rgba(255,90,60,${0.5 + 0.5 * Math.sin(time * 14)})`;
+    ctx.beginPath();
+    ctx.arc(x, y, 1.4, 0, TAU);
+    ctx.fill();
+  }
+
+  drawDigger(ctx, p) {
+    const len = 7;
+    ctx.strokeStyle = '#d8c3a0';
+    ctx.lineWidth = 3;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(p.x - p.dx * len, p.y - p.dy * len);
+    ctx.lineTo(p.x, p.y);
+    ctx.stroke();
+    ctx.fillStyle = 'rgba(255,220,150,0.8)';
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 2, 0, TAU);
+    ctx.fill();
   }
 
   drawExplosions(ctx, s) {

@@ -76,6 +76,7 @@ function hashObjectList(h, list) {
       h.str(key);
       if (typeof v === 'number') h.num(v);
       else if (typeof v === 'boolean') h.bool(v);
+      else if (v !== null && typeof v === 'object') h.str(JSON.stringify(v));
       else h.str(v);
     }
   }
