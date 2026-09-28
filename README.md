@@ -8,6 +8,8 @@ It's built with HTML5 Canvas and plain JavaScript ES modules. There's no framewo
 
 ## Play
 
+**Play it now at https://whorn76.github.io/scorched-tanks/**, or run it yourself:
+
 ```sh
 npm install   # only needed for the relay server and the tests
 npm start
