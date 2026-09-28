@@ -3,11 +3,11 @@
 // turns each intent into a *command* with everything random or trig-based already decided
 // (launch velocity, seeds, terrain), applies it, and in online games broadcasts it. Local,
 // AI and network input all flow through the same handleIntent() → resolve() → commit() path.
-import { Game, Phase, maxPower } from '../core/game.js';
+import { Game, Phase } from '../core/game.js';
 import { Rng } from '../core/rng.js';
 import { launchVector } from '../core/physics.js';
 import { planRound } from '../core/terrainGen.js';
-import { TICKS_PER_SECOND, clamp } from '../core/constants.js';
+import { MAX_POWER, TICKS_PER_SECOND, clamp } from '../core/constants.js';
 import { FREE_WEAPON, WEAPON_BY_ID } from '../core/weapons.js';
 import { Brain } from '../ai/brain.js';
 import { freshSeed } from './seed.js';
@@ -153,7 +153,7 @@ export class AuthoritySession extends Session {
       case 'fire': {
         const weapon = WEAPON_BY_ID[intent.weaponId] ? intent.weaponId : FREE_WEAPON;
         const angle = roundTo(clamp(Number(intent.angle) || 0, 0, 180), 0.1);
-        const power = Math.round(clamp(Number(intent.power) || 0, 0, maxPower(tank)));
+        const power = Math.round(clamp(Number(intent.power) || 0, 0, MAX_POWER));
         const { vx, vy, ux, uy } = launchVector(angle, power);
         return {
           type: 'shot',
@@ -263,7 +263,7 @@ export class AuthoritySession extends Session {
       turnId: s.turnId,
       playerId: tank.id,
       angle: preview?.angle ?? tank.angle,
-      power: Math.min(preview?.power ?? tank.power, maxPower(tank)),
+      power: preview?.power ?? tank.power,
       weaponId,
     });
   }

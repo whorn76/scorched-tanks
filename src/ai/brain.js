@@ -2,12 +2,13 @@
 // through the same intents as a human: aim previews while the barrel swings, then `fire`.
 // Each personality picks targets, weapons and purchases its own way. Planning is split across
 // frames with a small time budget so it never stalls rendering.
-import { Phase, maxPower } from '../core/game.js';
+import { MAX_POWER } from '../core/constants.js';
+import { Phase } from '../core/game.js';
 import { Rng } from '../core/rng.js';
 import { buyProblem } from '../core/economy.js';
 import { FREE_WEAPON, ITEMS, WEAPONS, WEAPON_BY_ID, productById } from '../core/weapons.js';
 import { fitWind, inValley, isBuried, searchAim } from './aim.js';
-import { PERSONALITIES, SOLID, SPOTTER, STRONGEST } from './personality.js';
+import { PERSONALITIES, SOLID, SPOTTER, STRONGEST, aimErrorScale } from './personality.js';
 
 const defaultNow = () => (globalThis.performance ? performance.now() : Date.now());
 const MAX_PURCHASES = 14;
@@ -199,7 +200,7 @@ export class Brain {
     this.target = target;
     this.weaponId = this.chooseWeapon(game, tank, target, p, m, buried);
     if (this.weaponId === 'riot' || !target) {
-      this.plan = { angle: tank.angle, power: Math.min(300, maxPower(tank)), score: 0 };
+      this.plan = { angle: tank.angle, power: 300, score: 0 };
       this.job = null;
     } else {
       this.job = searchAim(this.windEnv(game, p, m), tank, target, { blast: blastOf(WEAPON_BY_ID[this.weaponId]) });
@@ -212,7 +213,7 @@ export class Brain {
       for (;;) {
         const step = this.job.next();
         if (step.done) {
-            this.plan = { ...step.value, weaponId: this.weaponId };
+          this.plan = { ...step.value, weaponId: this.weaponId };
           this.job = null;
           break;
         }
@@ -224,20 +225,20 @@ export class Brain {
         const other = this.chooseTarget(game, tank, { target: 'nearest' }, this.target);
         if (other) {
           this.retargeted = true;
-            this.fallback = this.plan;
-            this.plan = null;
-            this.startPlan(game, tank, other);
+          this.fallback = this.plan;
+          this.plan = null;
+          this.startPlan(game, tank, other);
           return;
         }
       }
-        if (this.plan && this.fallback && this.fallback.score < this.plan.score) {
-          this.plan = this.fallback;
-          this.weaponId = this.fallback.weaponId;
-        }
+      if (this.plan && this.fallback && this.fallback.score < this.plan.score) {
+        this.plan = this.fallback;
+        this.weaponId = this.fallback.weaponId;
+      }
     }
     if (!this.plan || this.session.ticks - this.startTick < this.thinkTicks) return;
     this.fallback = null;
-    // Out of reach (too weak to shoot that far, or a hill in the way)? Drive closer if we can.
+    // Out of reach (too far in high gravity, or a hill in the way)? Drive closer if we can.
     if (this.plan.score > 140 && this.target && tank.stock.fuel > 0 && this.drives < 12 && this.weaponId !== 'riot') {
       const dir = Math.sign(this.target.x - tank.x) || 1;
       this.drives++;
@@ -247,12 +248,14 @@ export class Brain {
     }
     const p = this.personality(tank);
     const m = this.mem(tank);
-    const scale = p.learn ? Math.max(0.12, p.learn ** m.shotsAtTarget) : 1;
+    // Aim error shrinks as the AI walks its shots in on the same target, but never below
+    // its personality's floor, so even the best AI keeps missing now and then.
+    const scale = aimErrorScale(p, m.shotsAtTarget);
     const angle = this.plan.angle + (this.rng.float() * 2 - 1) * p.angleError * scale;
     const power = this.plan.power * (1 + (this.rng.float() * 2 - 1) * p.powerError * scale);
     this.final = {
       angle: Math.round(Math.min(180, Math.max(0, angle)) * 10) / 10,
-      power: Math.round(Math.min(maxPower(tank), Math.max(0, power))),
+      power: Math.round(Math.min(MAX_POWER, Math.max(0, power))),
     };
     this.swingFrom = { angle: tank.angle, power: tank.power };
     this.swingTicks = this.fast ? 0 : 18 + Math.round(Math.abs(this.final.angle - tank.angle) / 4);
@@ -279,7 +282,7 @@ export class Brain {
       playerId: tank.id,
       turnId: s.turnId,
       angle: this.final.angle,
-      power: Math.min(this.final.power, maxPower(tank)),
+      power: this.final.power,
       weaponId: this.weaponId,
     });
     if (!result?.ok) {

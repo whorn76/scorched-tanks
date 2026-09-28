@@ -1,6 +1,6 @@
 // Wires the game together: sessions, the fixed-timestep loop, input, rendering and the menus.
 import { DEFAULT_SETTINGS, DT, MAX_POWER, TANK, TANK_COLORS, WIDTH } from './core/constants.js';
-import { Phase, maxPower } from './core/game.js';
+import { Phase } from './core/game.js';
 import { FREE_WEAPON, WEAPONS, WEAPON_BY_ID } from './core/weapons.js';
 import { hashGame } from './core/hash.js';
 import { LocalSession } from './session/session.js';
@@ -422,22 +422,20 @@ function syncAim() {
       playerId: id,
       turnId: s.turnId,
       angle: tank.angle,
-      power: Math.min(tank.power, maxPower(tank)),
+      power: tank.power,
       weaponId: weapons.includes(tank.weapon) ? tank.weapon : FREE_WEAPON,
       fired: false,
     };
     app.aimDirty = true;
   }
-  app.aim.power = Math.min(app.aim.power, maxPower(tank));
   if (!availableWeapons(tank).includes(app.aim.weaponId)) app.aim.weaponId = FREE_WEAPON;
 }
 
 function changeAim(kind, delta) {
   const aim = app.aim;
   if (!aim || aim.fired) return;
-  const tank = app.session.state.tanks[aim.playerId];
   if (kind === 'angle') aim.angle = Math.round(Math.min(180, Math.max(0, aim.angle + delta)) * 10) / 10;
-  else aim.power = Math.min(maxPower(tank), Math.max(0, aim.power + delta));
+  else aim.power = Math.min(MAX_POWER, Math.max(0, aim.power + delta));
   app.aimDirty = true;
 }
 
@@ -508,7 +506,7 @@ function dragAim(event) {
   let angle = (Math.atan2(Math.max(0, dy), dx) * 180) / Math.PI;
   if (dy < 0) angle = dx >= 0 ? 0 : 180;
   aim.angle = Math.round(Math.min(180, Math.max(0, angle)) * 10) / 10;
-  aim.power = Math.round(Math.min(maxPower(tank), Math.max(0, Math.hypot(dx, dy) * 5)));
+  aim.power = Math.round(Math.min(MAX_POWER, Math.max(0, Math.hypot(dx, dy) * 5)));
   app.aimDirty = true;
   app.drag = { x: px, y: py };
 }

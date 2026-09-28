@@ -3,7 +3,7 @@
 // comes from an offscreen canvas that only re-uploads dirty rectangles; everything else is
 // vector drawing each frame. Game events (explosions, deaths…) spawn purely visual effects.
 import { HEIGHT, MAX_POWER, TANK, WIDTH, WIND_MAX } from '../core/constants.js';
-import { Phase, maxPower } from '../core/game.js';
+import { Phase } from '../core/game.js';
 import { FREE_WEAPON, WEAPON_BY_ID } from '../core/weapons.js';
 import { LOOSE } from '../core/terrain.js';
 import { buildPalette, hexToRgb } from './palette.js';
@@ -865,22 +865,17 @@ export class Renderer {
     label('ANGLE', 304);
     value(`${angle.toFixed(1)}°`, 304);
 
-    // Power with the health cap marked.
+    // Power.
     label('POWER', 392);
     const barX = 392;
     const barW = 190;
-    const cap = maxPower(tank) / MAX_POWER;
     ctx.fillStyle = 'rgba(255,255,255,0.1)';
     ctx.fillRect(barX, 28, barW, 12);
-    ctx.fillStyle = 'rgba(255,90,70,0.22)';
-    ctx.fillRect(barX + barW * cap, 28, barW * (1 - cap), 12);
     const grad = ctx.createLinearGradient(barX, 0, barX + barW, 0);
     grad.addColorStop(0, '#ffd36a');
     grad.addColorStop(1, '#ff6a3a');
     ctx.fillStyle = grad;
     ctx.fillRect(barX, 28, (barW * power) / MAX_POWER, 12);
-    ctx.fillStyle = '#ff5a4a';
-    ctx.fillRect(barX + barW * cap - 1, 25, 2, 18);
     ctx.font = `700 13px ${FONT}`;
     ctx.fillStyle = '#ffffff';
     ctx.textAlign = 'right';

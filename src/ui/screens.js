@@ -158,7 +158,7 @@ export function helpScreen({ onClose }) {
     'div',
     { class: 'panel wide', id: 'help-screen' },
     h('h2', { text: 'How to Play' }),
-    h('p', { text: 'Take turns lobbing shells at the other tanks. Set your angle and power, mind the wind, and fire. Last tank standing wins the round. Hits and kills earn cash to spend in the shop between rounds. Your maximum power is capped by your health, so a damaged tank can’t reach as far.' }),
+    h('p', { text: 'Take turns lobbing shells at the other tanks. Set your angle and power, mind the wind, and fire. Last tank standing wins the round. Hits and kills earn cash to spend in the shop between rounds.' }),
     h('div', { class: 'help-grid' },
       h('table', { class: 'keys' }, h('tbody', {}, KEYS.map(([k, v]) => h('tr', {}, h('th', { text: k }), h('td', { text: v }))))),
       h('div', { class: 'scroll' },

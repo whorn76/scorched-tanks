@@ -1,11 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
-import { Game, Phase, maxPower } from '../src/core/game.js';
+import { Game, Phase } from '../src/core/game.js';
 import { hashGame } from '../src/core/hash.js';
 import { loadSnapshot, makeSnapshot } from '../src/core/snapshot.js';
 import { HIT_LOST, HIT_TANK, HIT_TERRAIN, HIT_WALL, launchVector, traceShot, barrelTip } from '../src/core/physics.js';
-import { HEIGHT, TANK, WIDTH, DEATH_BLAST } from '../src/core/constants.js';
+import { HEIGHT, MAX_POWER, TANK, WIDTH, DEATH_BLAST } from '../src/core/constants.js';
 import { AIR } from '../src/core/terrain.js';
 import { planRound } from '../src/core/terrainGen.js';
 import { Rng } from '../src/core/rng.js';
@@ -25,7 +25,7 @@ function runWorld(game) {
 /** Binary-searches the power that lands a shot at `targetX` on flat ground. */
 function powerFor(game, shooter, angle, targetX) {
   let lo = 50;
-  let hi = maxPower(shooter);
+  let hi = MAX_POWER;
   for (let i = 0; i < 30; i++) {
     const mid = (lo + hi) / 2;
     const v = launchVector(angle, mid);
@@ -83,13 +83,13 @@ test('shots that break the rules are rejected', () => {
   assert.equal(game.apply({ type: 'shot', ...base }).error, 'not waiting for a move', 'no second shot while busy');
 });
 
-test('max power is capped by health (health × 10)', () => {
+test('a damaged tank can still fire at full power', () => {
   const game = flatGame();
   const tank = game.state.tanks[0];
-  tank.health = 42;
-  assert.equal(maxPower(tank), 420);
-  assert.equal(fire(game, { angle: 45, power: 421 }).error, 'bad power');
-  assert.equal(fire(game, { angle: 45, power: 420 }).ok, true);
+  tank.health = 5;
+  assert.equal(fire(game, { angle: 45, power: MAX_POWER + 1 }).error, 'bad power');
+  assert.equal(fire(game, { angle: 45, power: MAX_POWER }).ok, true);
+  assert.equal(tank.power, MAX_POWER);
 });
 
 test('a full-power 45° shot with no wind crosses the map', () => {
@@ -308,9 +308,8 @@ test('the same commands always produce the same state', () => {
     game.apply({ type: 'newRound', ...planRound({ settings: game.state.settings, tankCount: 3, round: 1, rng }) });
     const hashes = [];
     for (let i = 0; i < 8 && game.phase === Phase.AIM; i++) {
-      const tank = game.activeTank;
       const angle = 30 + ((i * 37) % 120);
-      const power = Math.min(maxPower(tank), 300 + ((i * 131) % 600));
+      const power = 300 + ((i * 131) % 600);
       fireAndSettle(game, { angle, power, seed: rng.nextU32() });
       hashes.push(hashGame(game));
     }

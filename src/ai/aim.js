@@ -2,7 +2,6 @@
 // effects), then add personality-dependent error. The search is a generator that yields every
 // few trial shots so the caller can spread it across frames.
 import { MAX_POWER, TANK, WIDTH, WIND_ACCEL } from '../core/constants.js';
-import { maxPower } from '../core/game.js';
 import { HIT_LOST, HIT_SHIELD, HIT_TANK, barrelTip, launchVector, traceShot } from '../core/physics.js';
 
 /** Where a shot at (angle, power) from `tank` would land, using `env` (which may lie about wind). */
@@ -41,7 +40,7 @@ export function candidateAngles(shooter, target) {
  * Generator that searches for the best (angle, power) to hit `target`. Yields between small
  * batches of trial shots; returns { angle, power, score, tries }.
  */
-export function* searchAim(env, shooter, target, { blast = 20, powerCap = maxPower(shooter), angles = null } = {}) {
+export function* searchAim(env, shooter, target, { blast = 20, powerCap = MAX_POWER, angles = null } = {}) {
   const cap = Math.max(60, Math.min(MAX_POWER, powerCap));
   let best = { angle: shooter.x < WIDTH / 2 ? 60 : 120, power: Math.min(500, cap), score: Infinity };
   let tries = 0;

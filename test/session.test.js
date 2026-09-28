@@ -56,3 +56,12 @@ test('hot-seat players shop one at a time, then the next round starts', () => {
   assert.equal(session.game.state.round, 1);
   assert.equal(session.game.state.tanks[0].stock.missile, 5);
 });
+
+test('a badly damaged tank still fires at the power its player chose', () => {
+  const session = startedSession({ turnTimer: 0 });
+  const s = session.game.state;
+  const tank = s.tanks[s.active];
+  tank.health = 3;
+  assert.equal(session.submit({ type: 'fire', turnId: s.turnId, playerId: tank.id, angle: 60, power: 1000, weaponId: 'baby' }).ok, true);
+  assert.equal(tank.power, 1000);
+});

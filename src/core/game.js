@@ -14,7 +14,6 @@ import {
   MAX_HEALTH,
   MAX_POWER,
   MOVE_STEP,
-  POWER_PER_HEALTH,
   SKY_THEMES,
   SPEED_PER_POWER,
   TANK,
@@ -62,8 +61,6 @@ const isInt = (v, min, max) => Number.isInteger(v) && v >= min && v <= max;
 const isNum = (v, min, max) => typeof v === 'number' && Number.isFinite(v) && v >= min && v <= max;
 
 export const emptyStock = () => Object.fromEntries(STOCK_IDS.map((id) => [id, 0]));
-
-export const maxPower = (tank) => Math.min(MAX_POWER, tank.health * POWER_PER_HEALTH);
 
 /** A tank's state. Plain data so it can be hashed, snapshotted and sent over the network. */
 export function createTank(player, index, money) {
@@ -219,7 +216,7 @@ export class Game {
         if (!weapon) return 'unknown weapon';
         if (weapon.id !== FREE_WEAPON && !(tank.stock[weapon.id] > 0)) return 'out of ammo';
         if (!isNum(cmd.angle, 0, 180)) return 'bad angle';
-        if (!isNum(cmd.power, 0, maxPower(tank))) return 'bad power';
+        if (!isNum(cmd.power, 0, MAX_POWER)) return 'bad power';
         const maxSpeed = MAX_POWER * SPEED_PER_POWER + 1;
         if (!isNum(cmd.vx, -maxSpeed, maxSpeed) || !isNum(cmd.vy, -maxSpeed, maxSpeed)) return 'bad velocity';
         if (!isNum(cmd.ux, -1.0001, 1.0001) || !isNum(cmd.uy, -1.0001, 1.0001)) return 'bad direction';
@@ -1133,7 +1130,7 @@ export class Game {
     }
     const active = s.tanks[s.active];
     if (s.pendingTurnEnd || !active?.alive) {
-      // A round can't go on forever (say, two wrecked tanks too weak to reach each other).
+      // A round can't go on forever (say, two tanks that keep missing each other).
       if (s.roundTurns >= this.turnLimit()) {
         this.endRound(true);
         return;

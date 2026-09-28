@@ -14,8 +14,6 @@ export const GRAVITY = { low: 190, normal: 300, high: 450 };
 export const SPEED_PER_POWER = 0.6;
 export const MAX_POWER = 1000;
 export const MAX_HEALTH = 100;
-/** The classic rule: a tank can't fire harder than health × 10. */
-export const POWER_PER_HEALTH = 10;
 
 /** Largest wind (in wind units) for each setting, and the push of one unit in px/s². */
 export const WIND_MAX = { off: 0, low: 4, medium: 8, high: 14 };

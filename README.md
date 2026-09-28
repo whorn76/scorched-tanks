@@ -17,7 +17,7 @@ npm start
 
 Then open http://localhost:8080. The game uses ES modules, which browsers only load over HTTP, so opening `index.html` straight from disk won't work. Any static file server works for local and peer-to-peer online play. `npm start` also runs the optional relay server for online play (see below). Set `PORT` to use a different port.
 
-**How to play.** On your turn, set the barrel's angle and the shot's power, pick a weapon and fire. Watch the wind gauge in the top bar. The last tank standing wins the round. Hits, kills and survival earn money for the shop between rounds. Your maximum power is capped at 10× your health (the classic rule), so a battered tank can't reach as far. A battery puts that power back. If a round drags on past 25 turns per tank, time is called and the healthiest tank wins.
+**How to play.** On your turn, set the barrel's angle and the shot's power, pick a weapon and fire. Watch the wind gauge in the top bar. The last tank standing wins the round. Hits, kills and survival earn money for the shop between rounds. Every tank can always fire at full power, however damaged it is. If a round drags on past 25 turns per tank, time is called and the healthiest tank wins.
 
 | Action | Keyboard | Mouse / touch |
 | --- | --- | --- |
@@ -66,19 +66,19 @@ Blast damage is full at the center and falls to 30% at the edge. Destroyed tanks
 | Parachute | $1,500 for 2 | Opens by itself when you fall too far, so the landing doesn't hurt. |
 | Shield | $3,500 for 1 | Absorbs 60 damage. Goes up automatically at the start of a round, or press S. |
 | Heavy Shield | $8,000 for 1 | Absorbs 150 damage. Same rules as the Shield. |
-| Battery | $2,500 for 2 | Restores 25 health, and with it 250 power. Press B. |
+| Battery | $2,500 for 2 | Restores 25 health. Press B. |
 | Fuel | $1,500 for 150 units | Drive with A and D, one unit per pixel. Climbing costs extra, and steep slopes stop you. |
 
 **Money.** You earn $30 per point of damage to others and $2,500 per kill. At the end of a round everyone gets $1,500, plus $750 for every tank they outlived, and the winner gets another $5,000. Hurting yourself costs $25 per point. Selling returns 60% of the price. Inventory and money carry over to the next round.
 
 **Settings** (saved in your browser): rounds, starting cash, wind strength and whether it shifts each turn, gravity, walls (open, wrap-around, rubber, concrete or random), terrain style (rolling hills, mountains, canyons, mostly flat or random), sky (day, sunset, night, storm or random), turn timer, talking tanks and sound volume.
 
-**AI opponents.** Every AI plans by firing trial shells through the real physics, then adds mistakes that fit its personality:
+**AI opponents.** Every AI plans by firing trial shells through the real physics, then adds mistakes that fit its personality. All but the Rookie get a bit more accurate with each shot at the same target, but none becomes a perfect shot. Against a tank that doesn't move, the share of baby missiles that do damage is roughly:
 
-- **Rookie:** sloppy aim and random weapons. It shoots at whoever is closest, mostly.
-- **Gunner:** aims well for gravity but ignores the wind. It's deadly on calm days and lost in a gale.
-- **Spotter:** fires a tracer in strong wind, then works the wind out from where its own shells land and tightens up with every shot. It goes after the weakest tank.
-- **Cyborg:** reads the wind exactly, picks the strongest weapon that won't hurt itself, and rarely misses. It holds grudges: it hits back at whoever last hit it.
+- **Rookie** (about 15%): sloppy aim and random weapons. It shoots at whoever is closest, mostly.
+- **Gunner** (about 40% in calm air, 10% in wind): aims well for gravity but ignores the wind. It's dangerous on calm days and lost in a gale.
+- **Spotter** (about 20%, rising to 40%): fires a tracer in strong wind, then works the wind out from where its own shells land and tightens up with every shot. It goes after the weakest tank.
+- **Cyborg** (about 35%, rising to 45%): reads the wind exactly and picks the strongest weapon that won't hurt itself, so its near misses often still do damage. It holds grudges: it hits back at whoever last hit it.
 - **Random:** one of the above, picked at the start of the game.
 
 AIs also shop, raise shields, use batteries, drive closer when they can't reach, and use a Riot Charge when they're buried.
@@ -169,7 +169,7 @@ npm test          # unit and integration tests (Node's built-in runner)
 npm run test:e2e  # browser tests with Playwright (installs Chromium if needed)
 ```
 
-`npm test` covers the PRNG, terrain carving and settling, collisions and sub-stepping, walls, blast falloff, falling and parachutes, every weapon's key behavior, shields, the economy and shop rules, the AI (including hitting a target within a few shots with no wind, and staying within its time budget), snapshot and hash round-trips, and rejection of bad protocol messages. It also runs full AI-driven online games over the loopback transport, with a host and one or two guests, and checks that every guest's state hash matches the host's after every shot. The relay is tested with real WebSocket clients, including a complete game.
+`npm test` covers the PRNG, terrain carving and settling, collisions and sub-stepping, walls, blast falloff, falling and parachutes, every weapon's key behavior, shields, the economy and shop rules, the AI (including hitting a target within a few shots with no wind, missing often enough that even the Cyborg isn't a perfect shot, and staying within its time budget), snapshot and hash round-trips, and rejection of bad protocol messages. It also runs full AI-driven online games over the loopback transport, with a host and one or two guests, and checks that every guest's state hash matches the host's after every shot. The relay is tested with real WebSocket clients, including a complete game.
 
 `npm run test:e2e` plays in real Chromium: the title demo and help screen, a local game against the AI with zero console errors, the phone layout's touch controls, and online games between two browser contexts. The online tests cover a page served by the relay, and the game on a GitHub Pages stand-in (static files under a subpath). From that stand-in they play once through a relay hosted elsewhere and once over PeerJS. The PeerJS test is skipped if the public PeerJS server can't be reached. Screenshots land in `test-results/e2e/`.
 

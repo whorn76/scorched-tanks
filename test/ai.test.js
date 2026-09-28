@@ -2,58 +2,82 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { LocalSession } from '../src/session/session.js';
 import { Brain } from '../src/ai/brain.js';
-import { PERSONALITIES } from '../src/ai/personality.js';
+import { PERSONALITIES, aimErrorScale } from '../src/ai/personality.js';
 import { isBuried, searchAim, trial, scoreImpact } from '../src/ai/aim.js';
 import { Phase } from '../src/core/game.js';
-import { WIDTH } from '../src/core/constants.js';
+import { WIDTH, WIND_ACCEL } from '../src/core/constants.js';
 import { flatGame } from './helpers.js';
 
 /**
- * An AI tank (id 0) against a dummy (id 1) that only fires harmless tracers into the air.
- * Returns how many shots the AI needed to damage the dummy (Infinity if it never did).
+ * An AI tank (id 0) fires `shots` shots at a dummy (id 1) that can't be destroyed and only
+ * fires harmless tracers straight up. Returns the AI's shots as { hit, miss }: whether each
+ * did damage, and how far from the dummy it landed (at most 400 px), plus the brain.
  */
-function duel({ level, wind = 0, windSetting = 'high', xs = [250, 1010], heights = null, seed = 1, maxShots = 8 }) {
+function duel({ level, wind = 0, windSetting = 'high', xs = [250, 1010], seed = 1, shots = 6 }) {
   const session = new LocalSession({ settings: { startCash: 0 }, players: [{ name: 'AI', ai: level }, { name: 'Dummy' }], seed, aiFast: true });
-  const game = flatGame({ xs, heights, wind, settings: { wind: windSetting, windChange: false } });
+  const game = flatGame({ xs, wind, settings: { wind: windSetting, windChange: false } });
   game.state.tanks[0].ai = level;
-  game.state.tanks[1].stock.tracer = 99;
+  const dummy = game.state.tanks[1];
+  dummy.health = 1e6;
+  dummy.stock.tracer = 99;
   session.game = game;
   session.brain = new Brain(session, { seed, fast: true });
-  const dummy = game.state.tanks[1];
-  let shots = 0;
-  for (let i = 0; i < 20000 && shots < maxShots; i++) {
+  const record = [];
+  let before = dummy.health;
+  for (let i = 0; i < 40000 && record.length < shots; i++) {
     const s = game.state;
     if (s.phase === Phase.AIM && s.active === 1) {
+      const impact = s.lastShot?.impact;
+      record.push({ hit: dummy.health < before, miss: impact ? Math.min(400, Math.abs(impact.x - dummy.x)) : 400 });
+      before = dummy.health;
       session.submit({ type: 'fire', turnId: s.turnId, playerId: 1, angle: 90, power: 0, weaponId: 'tracer' });
     }
-    const before = s.turnId;
     session.update();
-    if (s.turnId !== before && s.active === 1) {
-      shots++;
-      if (dummy.health < 100) return shots;
-    }
-    if (s.phase === Phase.ROUND_OVER) return dummy.alive ? Infinity : shots;
   }
-  return dummy.health < 100 ? shots : Infinity;
+  return { record, brain: session.brain, game };
 }
 
+const firstHit = (record) => {
+  const i = record.findIndex((shot) => shot.hit);
+  return i < 0 ? Infinity : i + 1;
+};
+const hitRate = (records) => {
+  const shots = records.flat();
+  return shots.filter((shot) => shot.hit).length / shots.length;
+};
+const mean = (values) => values.reduce((a, b) => a + b, 0) / values.length;
+const SEEDS = [1, 2, 3, 4, 5, 6];
+/** Twelve duels in a mix of calm and windy weather, the same for every level. */
+const mixedWeather = (level) =>
+  Array.from({ length: 12 }, (_, i) => duel({ level, wind: [0, 4, 8, 12][i % 4] * (i % 2 ? 1 : -1), seed: 40 + i }).record);
+
 test('the AI hits a target within a few shots when there is no wind', () => {
-  for (const seed of [1, 2, 3]) {
-    const shots = duel({ level: 'gunner', windSetting: 'off', seed });
-    assert.ok(shots <= 3, `gunner needed ${shots} shots (seed ${seed})`);
+  for (const level of ['gunner', 'cyborg']) {
+    const shots = SEEDS.map((seed) => firstHit(duel({ level, windSetting: 'off', seed, shots: 8 }).record));
+    assert.ok(shots.every((n) => n <= 8), `${level} needed ${shots.join(', ')} shots`);
+    assert.ok(mean(shots) <= 5, `${level} needed ${mean(shots).toFixed(1)} shots on average`);
   }
 });
 
-test('the Cyborg reads the wind and still hits in a gale', () => {
-  for (const wind of [-12, 12]) {
-    const shots = duel({ level: 'cyborg', wind, seed: 4 });
-    assert.ok(shots <= 2, `cyborg needed ${shots} shots in wind ${wind}`);
-  }
+test('the Cyborg reads the wind and keeps hitting in a gale; the Gunner does not', () => {
+  const rate = (level, windSetting, wind) => hitRate(SEEDS.map((seed) => duel({ level, windSetting, wind: wind * (seed % 2 ? 1 : -1), seed, shots: 8 }).record));
+  const cyborgCalm = rate('cyborg', 'off', 0);
+  const cyborgGale = rate('cyborg', 'high', 12);
+  const gunnerGale = rate('gunner', 'high', 12);
+  assert.ok(cyborgGale >= cyborgCalm * 0.6, `cyborg hit ${cyborgGale.toFixed(2)} in a gale vs ${cyborgCalm.toFixed(2)} when calm`);
+  assert.ok(gunnerGale < 0.1, `gunner hit ${gunnerGale.toFixed(2)} in a gale`);
 });
 
-test('the Spotter corrects for the wind after missing', () => {
-  const shots = duel({ level: 'spotter', wind: 11, seed: 5 });
-  assert.ok(shots <= 4, `spotter needed ${shots} shots`);
+test('the Spotter works out the wind and tightens up after missing', () => {
+  const duels = [1, 2, 3, 4, 5, 6, 7, 8].map((seed) => duel({ level: 'spotter', wind: seed % 2 ? 11 : -11, seed }));
+  const early = mean(duels.flatMap((d) => d.record.slice(0, 2).map((shot) => shot.miss)));
+  const late = mean(duels.flatMap((d) => d.record.slice(3).map((shot) => shot.miss)));
+  assert.ok(late < early * 0.6, `misses shrank from ${early.toFixed(0)} px to ${late.toFixed(0)} px`);
+  for (const { brain, game } of duels) {
+    const m = brain.mem(game.state.tanks[0]);
+    assert.equal(m.windKnown, true);
+    assert.ok(Math.abs(m.wind - game.env.windAccel) < WIND_ACCEL * 3, `estimated ${m.wind.toFixed(1)} for ${game.env.windAccel}`);
+  }
 });
 
 test('the Gunner ignores the wind, so a strong wind throws it off', () => {
@@ -67,16 +91,27 @@ test('the Gunner ignores the wind, so a strong wind throws it off', () => {
   assert.ok(game.env.windAccel !== 0);
 });
 
-test('difficulty spreads accuracy: rookies miss far more than cyborgs', () => {
-  const tally = (level) => {
-    let total = 0;
-    for (const seed of [11, 12, 13, 14, 15, 16]) total += Math.min(8, duel({ level, wind: 6, seed }));
-    return total;
-  };
-  const rookie = tally('rookie');
-  const cyborg = tally('cyborg');
-  assert.ok(cyborg <= 9, `cyborg took ${cyborg} shots over six duels`);
-  assert.ok(rookie > cyborg * 1.8, `rookie took ${rookie} vs cyborg ${cyborg}`);
+test('no AI is a perfect shot, not even the Cyborg, but it walks its shots in', () => {
+  const cyborg = mixedWeather('cyborg');
+  const overall = hitRate(cyborg);
+  const first = hitRate(cyborg.map((record) => record.slice(0, 1)));
+  const later = hitRate(cyborg.map((record) => record.slice(3)));
+  assert.ok(overall > 0.2 && overall < 0.7, `the Cyborg did damage with ${Math.round(overall * 100)}% of its shots`);
+  assert.ok(first < 0.5, `and ${Math.round(first * 100)}% of its first shots`);
+  assert.ok(later > first, `its later shots hit more often (${Math.round(later * 100)}% vs ${Math.round(first * 100)}%)`);
+  for (const p of Object.values(PERSONALITIES)) {
+    assert.equal(aimErrorScale(p, 0), 1, `${p.label} starts with its full error`);
+    assert.ok(aimErrorScale(p, 50) >= 0.5, `${p.label} never becomes a perfect shot`);
+    assert.ok(aimErrorScale(p, 3) <= aimErrorScale(p, 1), `${p.label} doesn't get worse with practice`);
+  }
+});
+
+test('difficulty spreads accuracy: rookies miss far more than spotters and cyborgs', () => {
+  const rookie = hitRate(mixedWeather('rookie'));
+  const spotter = hitRate(mixedWeather('spotter'));
+  const cyborg = hitRate(mixedWeather('cyborg'));
+  assert.ok(rookie < spotter, `rookie ${rookie.toFixed(2)} vs spotter ${spotter.toFixed(2)}`);
+  assert.ok(rookie < cyborg * 0.6, `rookie ${rookie.toFixed(2)} vs cyborg ${cyborg.toFixed(2)}`);
 });
 
 test('the trial search finds an aim that really lands on the target', () => {
@@ -158,14 +193,14 @@ test('a hurt AI uses a battery and raises a shield before shooting', () => {
   assert.ok(tank.shield > 0);
 });
 
-test('an AI too weak to reach its target drives closer', () => {
+test('an AI that cannot reach its target drives closer', () => {
   const session = new LocalSession({ players: [{ name: 'A', ai: 'cyborg' }, { name: 'B' }], aiFast: true });
-  const game = flatGame({ xs: [150, 1100], settings: { wind: 'off' } });
+  // In high gravity even a full-power shot only carries about 800 px.
+  const game = flatGame({ xs: [100, 1180], settings: { wind: 'off', gravity: 'high' } });
   session.game = game;
   session.brain = new Brain(session, { fast: true });
   const tank = game.state.tanks[0];
   tank.ai = 'cyborg';
-  tank.health = 45; // max power 450: nowhere near enough for 950 px
   tank.stock.fuel = 300;
   const startX = tank.x;
   let fired = false;

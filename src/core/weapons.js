@@ -47,7 +47,7 @@ export const ITEMS = [
   { id: 'heavyshield', name: 'Heavy Shield', price: 8000, bundle: 1, strength: 150,
     blurb: 'Absorbs 150 damage. Raised at round start, or press S.' },
   { id: 'battery', name: 'Battery', price: 2500, bundle: 2, restore: 25,
-    blurb: 'Restores 25 health (and max power). Press B.' },
+    blurb: 'Restores 25 health. Press B.' },
   { id: 'fuel', name: 'Fuel', price: 1500, bundle: 150, blurb: 'Drive with A and D. Slopes cost more.' },
 ];
 
