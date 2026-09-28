@@ -120,6 +120,12 @@ export class GuestSession extends Session {
   update() {
     this.ticks++;
     if (!this.game || this.loading) return;
+    // A snapshot we asked for never arrived in full (a lost message): ask again.
+    if (this.awaitingSnapshot && this.ticks - this.resyncAt > 60 * 10) {
+      this.awaitingSnapshot = false;
+      this.snapshotParts = null;
+      this.requestResync('snapshot timed out');
+    }
     this.processQueue();
     // Catch up faster when commands are piling up (e.g. after a background tab).
     const behind = this.queue.filter((m) => m.t === 'cmd').length;
@@ -144,7 +150,12 @@ export class GuestSession extends Session {
           return;
         }
         this.queue.shift();
-        const result = this.game.apply(msg.cmd);
+        let result;
+        try {
+          result = this.game.apply(msg.cmd);
+        } catch (error) {
+          result = { ok: false, error: error.message };
+        }
         this.seq = msg.seq;
         this.stats.commands++;
         this.collectGameEvents();
@@ -153,7 +164,11 @@ export class GuestSession extends Session {
           return;
         }
       } else {
-        if (msg.seq > this.seq) return; // its commands haven't arrived yet
+        if (msg.seq > this.seq) {
+          // The channel is ordered, so the commands before this check were lost on the way.
+          if (!this.queue.some((m) => m.t === 'cmd' && m.seq === this.seq + 1)) this.requestResync('missing commands');
+          return;
+        }
         this.queue.shift();
         if (msg.seq === this.seq) this.checkHash(msg.hash);
       }
@@ -172,6 +187,7 @@ export class GuestSession extends Session {
   requestResync(reason) {
     if (this.awaitingSnapshot) return;
     this.awaitingSnapshot = true;
+    this.resyncAt = this.ticks;
     this.stats.resyncs++;
     this.conn.send({ t: 'resync' });
     this.pushEvent({ type: 'net', level: 'warn', text: 'Out of sync with the host. Repairing…', detail: reason });

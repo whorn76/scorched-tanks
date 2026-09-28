@@ -158,6 +158,26 @@ test('a hurt AI uses a battery and raises a shield before shooting', () => {
   assert.ok(tank.shield > 0);
 });
 
+test('an AI too weak to reach its target drives closer', () => {
+  const session = new LocalSession({ players: [{ name: 'A', ai: 'cyborg' }, { name: 'B' }], aiFast: true });
+  const game = flatGame({ xs: [150, 1100], settings: { wind: 'off' } });
+  session.game = game;
+  session.brain = new Brain(session, { fast: true });
+  const tank = game.state.tanks[0];
+  tank.ai = 'cyborg';
+  tank.health = 45; // max power 450: nowhere near enough for 950 px
+  tank.stock.fuel = 300;
+  const startX = tank.x;
+  let fired = false;
+  for (let i = 0; i < 3000 && !fired; i++) {
+    session.update();
+    fired = session.drainEvents().some((e) => e.type === 'fire');
+  }
+  assert.ok(tank.x > startX + 40, `drove from ${startX} to ${tank.x}`);
+  assert.ok(tank.stock.fuel < 300);
+  assert.ok(fired, 'and then fired');
+});
+
 test('AI targets by personality: weakest for the Spotter, revenge for the Cyborg', () => {
   const session = new LocalSession({ players: [{ name: 'A' }, { name: 'B' }], aiFast: true });
   const game = flatGame({ xs: [100, 400, 700, 1000] });

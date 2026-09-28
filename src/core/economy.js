@@ -7,7 +7,7 @@ export const ECONOMY = Object.freeze({
   damageReward: 30, // per point of damage dealt to an opponent
   killReward: 2500,
   selfDamageCost: 25, // per point of damage dealt to yourself
-  roundIncome: 1000, // everyone, every round
+  roundIncome: 1500, // everyone, every round
   winBonus: 5000, // last tank standing
   survivalBonus: 750, // per opponent you outlived this round
   sellRate: 0.6, // selling returns this share of what you paid

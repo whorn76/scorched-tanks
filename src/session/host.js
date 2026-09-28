@@ -153,7 +153,7 @@ export class HostSession extends AuthoritySession {
   // --- Connections ---------------------------------------------------------------------------
 
   onConnection(conn) {
-    const peer = { conn, state: 'hello', slot: -1, playerId: -1, name: 'Guest', limiter: new RateLimiter(30, 60), strikes: 0 };
+    const peer = { conn, state: 'hello', slot: -1, playerId: -1, name: 'Guest', limiter: new RateLimiter(30, 60), chatLimiter: new RateLimiter(1, 4), strikes: 0 };
     this.peers.set(conn.id, peer);
     conn.onMessage((raw) => this.onPeerMessage(peer, raw));
     conn.onClose(() => this.onPeerClose(peer));
@@ -194,7 +194,8 @@ export class HostSession extends AuthoritySession {
       case 'hello':
         return;
       case 'chat':
-        this.chat(peer.name, this.colorOf(peer), msg.text);
+        // Chat is copied to every guest, so it gets a much tighter budget than moves.
+        if (peer.chatLimiter.allow()) this.chat(peer.name, this.colorOf(peer), msg.text);
         return;
       case 'ping':
         peer.conn.send({ t: 'pong', id: msg.id });
@@ -243,8 +244,12 @@ export class HostSession extends AuthoritySession {
     peer.state = 'closed';
     this.peers.delete(peer.conn.id);
     this.snapshotWaiters.delete(peer);
-    if (state === 'lobby') this.dropFromLobby(peer);
-    if ((state === 'playing' || state === 'rejected') && this.game && peer.playerId >= 0 && this.status === 'playing') {
+    if (this.status === 'lobby') {
+      if (state === 'lobby') this.dropFromLobby(peer);
+      return;
+    }
+    // Once the game exists (even while it's still starting), an AI takes over the tank.
+    if (this.game && peer.playerId >= 0 && this.status !== 'ended') {
       const tank = this.game.state.tanks[peer.playerId];
       if (tank && !tank.ai) {
         this.pendingControl.push({ type: 'control', playerId: peer.playerId, ai: 'gunner' });

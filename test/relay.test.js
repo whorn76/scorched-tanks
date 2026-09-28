@@ -53,6 +53,39 @@ test('the server serves the game but not the project internals', async () => {
   }
 });
 
+test('encoded dot-dot paths cannot escape the allow-list', async () => {
+  const { request } = await import('node:http');
+  const get = (path) =>
+    new Promise((resolve, reject) => {
+      const req = request({ host: '127.0.0.1', port: server.port, path, method: 'GET' }, (res) => {
+        res.resume();
+        resolve(res.statusCode);
+      });
+      req.on('error', reject);
+      req.end();
+    });
+  for (const path of ['/src/..%2fpackage.json', '/src/..%2f.git%2fconfig', '/src/..%5cpackage.json', '/src/%2e%2e/package.json', '/vendor/..%2fserver%2frelay.js', '/src/core%00.js']) {
+    assert.equal(await get(path), 404, path);
+  }
+  assert.equal(await get('/src/core/game.js'), 200);
+});
+
+test('pathologically nested messages do not take the relay down', async () => {
+  const host = await hostRelay(url);
+  const { ws } = await rawSocket();
+  ws.send(JSON.stringify({ type: 'join', code: host.code, v: 1 }));
+  await sleep(50);
+  const depth = 20000;
+  ws.send(`{"type":"data","data":${'['.repeat(depth)}${']'.repeat(depth)}}`);
+  await sleep(200);
+  // Still alive: a fresh room can be created and used.
+  const again = await hostRelay(url);
+  assert.match(again.code, /^[ACEFGHKMNPRTWXY34679]{5}$/);
+  again.close();
+  host.close();
+  ws.close();
+});
+
 test('host and guest exchange messages through a room', async () => {
   const host = await hostRelay(url);
   assert.match(host.code, /^[ACEFGHKMNPRTWXY34679]{5}$/);

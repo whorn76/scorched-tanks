@@ -176,6 +176,13 @@ export function roundSummary(game) {
   const r = s.results;
   if (!r) return h('div');
   const winner = s.tanks[r.winner];
+  const title = r.timeUp
+    ? winner
+      ? `Time's up! ${winner.name} wins round ${r.round}`
+      : `Time's up! Round ${r.round} is a draw`
+    : winner
+      ? `${winner.name} wins round ${r.round}!`
+      : `Round ${r.round}: nobody survived!`;
   const rows = [...r.earnings]
     .sort((a, b) => b.total - a.total)
     .map((e) => {
@@ -189,7 +196,7 @@ export function roundSummary(game) {
   return h(
     'div',
     { class: 'panel banner', id: 'round-summary' },
-    h('h2', { text: winner ? `${winner.name} wins round ${r.round}!` : `Round ${r.round}: nobody survived!` }),
+    h('h2', { text: title }),
     h('table', { class: 'results' },
       h('thead', {}, h('tr', {}, h('th', { text: 'Tank' }), h('th', { text: 'Damage' }), h('th', { text: 'Kills' }), h('th', { text: 'Earned' }))),
       h('tbody', {}, rows)),

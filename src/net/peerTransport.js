@@ -66,10 +66,13 @@ class PeerConnection extends Connection {
     conn.on('data', (data) => this.deliver(data));
     conn.on('close', () => this.fireClose('closed'));
     conn.on('error', () => this.fireClose('error'));
-    // Some browsers only report a dead peer through the ICE state.
+    // Some browsers only report a dead peer through the ICE state. "disconnected" can be a
+    // blip, so it only counts once it has lasted a while.
     conn.peerConnection?.addEventListener?.('iceconnectionstatechange', () => {
       const state = conn.peerConnection.iceConnectionState;
+      clearTimeout(this.iceTimer);
       if (state === 'failed' || state === 'closed') this.fireClose(state);
+      else if (state === 'disconnected') this.iceTimer = setTimeout(() => this.fireClose('disconnected'), 10000);
     });
   }
 
@@ -94,6 +97,7 @@ class PeerConnection extends Connection {
 
   fireClose(reason) {
     if (this.closed) return;
+    clearTimeout(this.iceTimer);
     super.fireClose(reason);
     if (this.owner) setTimeout(() => this.owner.destroy(), 100);
   }

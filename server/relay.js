@@ -1,7 +1,8 @@
 // The WebSocket relay for online play: a fallback for networks where direct WebRTC connections
 // fail. One host and up to five guests share a room identified by a short code. The relay
 // forwards messages without looking inside them, and it enforces limits on room size, message
-// size and message rate. Rooms disappear as soon as their host leaves.
+// size, message rate, connections per address and idle time. Rooms disappear as soon as their
+// host leaves.
 import { WebSocketServer } from 'ws';
 import { randomInt } from 'node:crypto';
 
@@ -13,10 +14,14 @@ export const LIMITS = {
   maxGuests: 5,
   maxRooms: 500,
   maxPayload: 64 * 1024, // bytes per message
-  rate: 60, // messages per second, sustained
+  rate: 60, // messages per second, sustained (a host gets this much again per guest)
   burst: 150,
   helloTimeoutMs: 15000, // a socket must host or join this quickly
   heartbeatMs: 30000,
+  maxConnectionsPerAddress: 24,
+  maxRoomsPerAddress: 4,
+  idleRoomMs: 30 * 60 * 1000, // a room with no traffic for this long is closed
+  maxBuffered: 1024 * 1024, // a socket that stops reading gets closed
 };
 
 function makeCode(rooms) {
@@ -46,9 +51,11 @@ class Bucket {
   }
 }
 
-const send = (ws, obj) => {
-  if (ws.readyState === 1) ws.send(JSON.stringify(obj));
-};
+/** Behind a tunnel or proxy every socket comes from the proxy, so prefer its client header. */
+function addressOf(req) {
+  const forwarded = req.headers['cf-connecting-ip'] || String(req.headers['x-forwarded-for'] ?? '').split(',')[0].trim();
+  return forwarded || req.socket.remoteAddress || 'unknown';
+}
 
 /**
  * Attaches the relay to an HTTP server on the /ws path. Returns { close, rooms, stats }.
@@ -56,8 +63,25 @@ const send = (ws, obj) => {
 export async function attachRelay(server, options = {}) {
   const limits = { ...LIMITS, ...options };
   const wss = new WebSocketServer({ noServer: true, maxPayload: limits.maxPayload });
-  const rooms = new Map(); // code → { host, guests: Map(peerId → ws), nextPeer }
-  const stats = { connections: 0, messages: 0, dropped: 0 };
+  const rooms = new Map(); // code → { host, guests: Map(peerId → ws), nextPeer, address, lastActive }
+  const perAddress = new Map(); // address → open connections
+  const stats = { connections: 0, messages: 0, dropped: 0, errors: 0 };
+
+  const send = (ws, obj) => {
+    if (ws.readyState !== 1) return;
+    if (ws.bufferedAmount > limits.maxBuffered) {
+      ws.terminate(); // not reading its messages; don't buffer for it forever
+      return;
+    }
+    let text;
+    try {
+      text = JSON.stringify(obj);
+    } catch {
+      stats.errors++;
+      return;
+    }
+    ws.send(text);
+  };
 
   server.on('upgrade', (req, socket, head) => {
     let pathname = '';
@@ -70,12 +94,19 @@ export async function attachRelay(server, options = {}) {
       socket.destroy();
       return;
     }
-    wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
+    const address = addressOf(req);
+    if ((perAddress.get(address) ?? 0) >= limits.maxConnectionsPerAddress) {
+      socket.write('HTTP/1.1 429 Too Many Requests\r\nConnection: close\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+    wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req, address));
   });
 
-  wss.on('connection', (ws) => {
+  wss.on('connection', (ws, req, address) => {
     stats.connections++;
-    const client = { role: null, code: null, peer: null, bucket: new Bucket(limits.rate, limits.burst) };
+    perAddress.set(address, (perAddress.get(address) ?? 0) + 1);
+    const client = { role: null, code: null, peer: null, address, bucket: new Bucket(limits.rate, limits.burst), strikes: 0 };
     ws.isAlive = true;
     ws.on('pong', () => {
       ws.isAlive = true;
@@ -86,39 +117,52 @@ export async function attachRelay(server, options = {}) {
 
     ws.on('message', (raw, isBinary) => {
       stats.messages++;
-      if (!client.bucket.take()) {
-        stats.dropped++;
-        if (client.bucket.tokens < -limits.burst) ws.close(4008, 'rate limit');
-        client.bucket.tokens -= 0.5; // repeat offenders drain further and get closed
-        return;
-      }
-      if (isBinary) return;
-      let msg;
       try {
-        msg = JSON.parse(raw.toString());
+        if (!client.bucket.take()) {
+          stats.dropped++;
+          // Tell the sender once in a while instead of dropping silently, and cut off floods.
+          if (++client.strikes % 50 === 1) send(ws, { type: 'error', reason: 'rate' });
+          if (client.strikes > 300) ws.close(4008, 'rate limit');
+          return;
+        }
+        if (isBinary) return;
+        const msg = JSON.parse(raw.toString());
+        if (!msg || typeof msg !== 'object') return;
+        handle(ws, client, msg);
       } catch {
-        return;
+        stats.errors++; // malformed or pathological input: ignore it, never crash the server
       }
-      if (!msg || typeof msg !== 'object') return;
-      handle(ws, client, msg);
     });
 
     ws.on('close', () => {
       clearTimeout(helloTimer);
+      const left = (perAddress.get(address) ?? 1) - 1;
+      if (left > 0) perAddress.set(address, left);
+      else perAddress.delete(address);
       leave(ws, client);
     });
     ws.on('error', () => {});
   });
 
+  function roomsOf(address) {
+    let n = 0;
+    for (const room of rooms.values()) if (room.address === address) n++;
+    return n;
+  }
+
   function handle(ws, client, msg) {
+    const room = client.code ? rooms.get(client.code) : null;
+    if (room) room.lastActive = Date.now();
     switch (msg.type) {
       case 'host': {
         if (client.role) return;
         if (msg.v !== RELAY_VERSION) return send(ws, { type: 'error', reason: 'version' });
-        if (rooms.size >= limits.maxRooms) return send(ws, { type: 'error', reason: 'busy' });
+        if (rooms.size >= limits.maxRooms || roomsOf(client.address) >= limits.maxRoomsPerAddress) {
+          return send(ws, { type: 'error', reason: 'busy' });
+        }
         const code = makeCode(rooms);
         if (!code) return send(ws, { type: 'error', reason: 'busy' });
-        rooms.set(code, { host: ws, guests: new Map(), nextPeer: 1 });
+        rooms.set(code, { host: ws, hostClient: client, guests: new Map(), nextPeer: 1, address: client.address, lastActive: Date.now() });
         client.role = 'host';
         client.code = code;
         return send(ws, { type: 'hosted', code });
@@ -127,33 +171,36 @@ export async function attachRelay(server, options = {}) {
         if (client.role) return;
         if (msg.v !== RELAY_VERSION) return send(ws, { type: 'error', reason: 'version' });
         const code = typeof msg.code === 'string' ? msg.code.toUpperCase() : '';
-        const room = rooms.get(code);
-        if (!room) return send(ws, { type: 'error', reason: 'no-room' });
-        if (room.guests.size >= limits.maxGuests) return send(ws, { type: 'error', reason: 'full' });
-        const peer = `p${room.nextPeer++}`;
-        room.guests.set(peer, ws);
+        const target = rooms.get(code);
+        if (!target) return send(ws, { type: 'error', reason: 'no-room' });
+        if (target.guests.size >= limits.maxGuests) return send(ws, { type: 'error', reason: 'full' });
+        const peer = `p${target.nextPeer++}`;
+        target.guests.set(peer, ws);
+        target.lastActive = Date.now();
         client.role = 'guest';
         client.code = code;
         client.peer = peer;
+        // The host relays to every guest, so its budget grows with the room.
+        const hostBucket = target.hostClient.bucket;
+        hostBucket.rate = limits.rate * (1 + target.guests.size);
+        hostBucket.burst = limits.burst * (1 + target.guests.size);
         send(ws, { type: 'joined', code });
-        return send(room.host, { type: 'peer-join', peer });
+        return send(target.host, { type: 'peer-join', peer });
       }
       case 'to': {
-        if (client.role !== 'host') return;
-        const target = rooms.get(client.code)?.guests.get(msg.peer);
+        if (client.role !== 'host' || typeof msg.peer !== 'string') return;
+        const target = room?.guests.get(msg.peer);
         if (target) send(target, { type: 'data', data: msg.data });
         return;
       }
       case 'data': {
         if (client.role !== 'guest') return;
-        const room = rooms.get(client.code);
         if (room) send(room.host, { type: 'from', peer: client.peer, data: msg.data });
         return;
       }
       case 'kick': {
-        if (client.role !== 'host') return;
-        const target = rooms.get(client.code)?.guests.get(msg.peer);
-        target?.close(4003, 'removed by host');
+        if (client.role !== 'host' || typeof msg.peer !== 'string') return;
+        room?.guests.get(msg.peer)?.close(4003, 'removed by host');
         return;
       }
       case 'ping':
@@ -182,6 +229,14 @@ export async function attachRelay(server, options = {}) {
       }
       ws.isAlive = false;
       ws.ping();
+    }
+    const now = Date.now();
+    for (const [code, room] of rooms) {
+      if (now - room.lastActive > limits.idleRoomMs) {
+        rooms.delete(code);
+        room.host.close(4002, 'idle');
+        for (const guest of room.guests.values()) guest.close(4002, 'idle');
+      }
     }
   }, limits.heartbeatMs);
   heartbeat.unref?.();

@@ -18,7 +18,9 @@ export function scoreImpact(result, shooter, target, blast = 20) {
   const hitTarget = (result.code === HIT_TANK || result.code === HIT_SHIELD) && result.tank === target.id;
   const dx = result.x - target.x;
   const dy = result.y - (target.y - 8);
-  let score = hitTarget ? 0 : Math.sqrt(dx * dx + dy * dy);
+  // Even direct hits keep scoring by distance to the middle, so the search settles on the
+  // centre of the target rather than a lucky clip of its edge.
+  let score = Math.sqrt(dx * dx + dy * dy) * (hitTarget ? 0.5 : 1);
   const sx = result.x - shooter.x;
   const sy = result.y - (shooter.y - 8);
   const selfDistance = Math.sqrt(sx * sx + sy * sy);
@@ -82,7 +84,7 @@ export function* searchAim(env, shooter, target, { blast = 20, powerCap = maxPow
       }
     }
     yield best.score;
-    if (best.score === 0) break;
+    if (best.score < 2) break;
   }
   // Fine-tune the angle around the winner.
   for (const da of [-2, -1, -0.5, 0.5, 1, 2]) {

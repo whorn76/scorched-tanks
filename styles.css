@@ -821,3 +821,196 @@ td.money {
 #settings-screen {
   width: min(820px, 100%);
 }
+
+/* --- Touch controls ------------------------------------------------------------------------- */
+
+.touch {
+  position: fixed;
+  inset: auto 0 0 0;
+  pointer-events: none;
+  z-index: 12;
+  padding: 8px max(8px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left));
+}
+
+.touch-bar {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  pointer-events: none;
+}
+
+.touch-group {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  padding: 4px;
+  border-radius: 14px;
+  background: rgba(8, 12, 22, 0.55);
+  pointer-events: auto;
+}
+
+.touch-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--muted);
+  padding: 0 4px;
+}
+
+.touch-btn {
+  min-width: 46px;
+  height: 46px;
+  border-radius: 11px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(40, 50, 76, 0.85);
+  color: #fff;
+  font: 700 20px var(--font);
+  pointer-events: auto;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.touch-btn:active {
+  background: rgba(80, 96, 136, 0.95);
+}
+
+.touch-btn.small {
+  font-size: 13px;
+  padding: 0 10px;
+}
+
+.touch-btn.fire {
+  min-width: 96px;
+  height: 58px;
+  font: 800 20px var(--display);
+  letter-spacing: 1px;
+  background: linear-gradient(180deg, #ff9d3d, #e8531f);
+  border-color: rgba(255, 200, 120, 0.6);
+  pointer-events: auto;
+}
+
+.touch-btn.menu {
+  position: fixed;
+  top: max(8px, env(safe-area-inset-top));
+  right: max(8px, env(safe-area-inset-right));
+  min-width: 42px;
+  height: 42px;
+  font-size: 20px;
+  background: rgba(8, 12, 22, 0.6);
+}
+
+.touch-weapon {
+  min-width: 110px;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+@media (max-width: 700px) {
+  .touch-btn {
+    min-width: 40px;
+    height: 40px;
+    font-size: 17px;
+  }
+  .touch-weapon {
+    min-width: 80px;
+  }
+  .touch-label {
+    display: none;
+  }
+}
+
+.touch-bar {
+  justify-content: space-between;
+  align-items: flex-end;
+  flex-wrap: nowrap;
+}
+
+.touch-cluster {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  pointer-events: none;
+}
+
+.touch-cluster.left {
+  align-items: flex-start;
+}
+
+.touch-cluster.right {
+  align-items: flex-end;
+}
+
+.touch-row {
+  display: flex;
+  gap: 6px;
+  align-items: flex-end;
+}
+
+@media (max-height: 520px) {
+  .touch-btn {
+    min-width: 38px;
+    height: 38px;
+    font-size: 16px;
+  }
+  .touch-btn.fire {
+    min-width: 78px;
+    height: 46px;
+    font-size: 17px;
+  }
+  .touch-btn.small {
+    font-size: 12px;
+    padding: 0 8px;
+  }
+  .touch-label {
+    display: none;
+  }
+  .touch-weapon {
+    min-width: 84px;
+    font-size: 12px;
+  }
+  .panel {
+    padding: 14px 18px;
+  }
+  .panel h2 {
+    font-size: 21px;
+    margin-bottom: 8px;
+  }
+  .logo-top {
+    font-size: 34px;
+  }
+  .logo-bottom {
+    font-size: 22px;
+  }
+  .tagline {
+    margin: 2px 0 10px;
+    font-size: 13px;
+  }
+  .btn.big {
+    font-size: 16px;
+    padding: 9px 14px;
+  }
+  .menu {
+    gap: 7px;
+  }
+  .fineprint {
+    display: none;
+  }
+}
+
+.lobby .settings-grid {
+  gap: 5px 12px;
+}
+
+.lobby .settings-grid select {
+  padding: 5px 8px;
+  font-size: 14px;
+}
+
+.lobby .row.end {
+  margin-top: 10px;
+}

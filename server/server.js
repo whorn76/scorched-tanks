@@ -3,7 +3,7 @@
 // index.html straight from disk won't work.
 import { createServer } from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
-import { extname, resolve, sep } from 'node:path';
+import { extname, posix, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
@@ -42,8 +42,12 @@ export function createStaticHandler() {
       return;
     }
     if (pathname.endsWith('/')) pathname += 'index.html';
-    const file = resolve(root, `.${pathname}`);
-    if (!file.startsWith(root + sep) || !PUBLIC.some((re) => re.test(pathname))) {
+    // Check the allow-list against the normalized path, so encoded "..", backslashes or NULs
+    // can't reach anything outside it.
+    const normalized = posix.normalize(pathname);
+    const unsafe = /[\\\0]/.test(pathname) || normalized !== pathname || normalized.split('/').includes('..');
+    const file = resolve(root, `.${normalized}`);
+    if (unsafe || !file.startsWith(root + sep) || !PUBLIC.some((re) => re.test(normalized))) {
       res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }).end('Not found');
       return;
     }

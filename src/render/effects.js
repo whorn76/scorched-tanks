@@ -59,7 +59,7 @@ export class Effects {
         color: kind === 'death' ? '255,210,120' : Math.random() < 0.5 ? '255,236,160' : '255,150,60',
       });
     }
-    const puffs = Math.min(26, 4 + Math.round(radius / 5));
+    const puffs = Math.min(18, 3 + Math.round(radius / 7));
     for (let i = 0; i < puffs; i++) {
       const a = Math.random() * Math.PI * 2;
       const d = Math.random() * radius * 0.7;
@@ -70,16 +70,53 @@ export class Effects {
         vx: rand(-15, 15),
         vy: rand(-40, -12),
         life: -rand(0.05, 0.3),
-        maxLife: rand(1.2, 2.4),
-        size: rand(radius * 0.25, radius * 0.5) + 5,
-        grow: rand(8, 20),
+        maxLife: rand(1.1, 2.1),
+        size: rand(radius * 0.18, radius * 0.34) + 4,
+        grow: rand(7, 16),
         gravity: 0,
         drag: 0.6,
-        shade: Math.round(rand(50, 90)),
+        shade: Math.round(rand(55, 95)),
       });
     }
     this.shake(radius / 7);
-    if (flash) this.flashScreen(0.95);
+    if (flash) {
+      this.flashScreen(0.95);
+      // A mushroom of smoke: a rising column topped by a wide cap.
+      for (let i = 0; i < 24; i++) {
+        const up = i / 24;
+        this.add({
+          type: 'smoke',
+          x: x + rand(-radius, radius) * 0.12,
+          y: y - up * radius * 0.5,
+          vx: rand(-5, 5),
+          vy: -rand(45, 70) * (0.6 + up),
+          life: -0.15 - up * 0.35,
+          maxLife: rand(2.6, 3.6),
+          size: rand(radius * 0.16, radius * 0.26),
+          grow: rand(5, 10),
+          gravity: 0,
+          drag: 0.45,
+          shade: Math.round(rand(80, 120)),
+        });
+      }
+      for (let i = 0; i < 16; i++) {
+        const a = (i / 16) * Math.PI * 2;
+        this.add({
+          type: 'smoke',
+          x: x + Math.cos(a) * radius * 0.3,
+          y: y - radius * 0.9 + Math.sin(a) * radius * 0.12,
+          vx: Math.cos(a) * rand(25, 45),
+          vy: -rand(55, 75),
+          life: -0.55,
+          maxLife: rand(2.8, 3.8),
+          size: rand(radius * 0.22, radius * 0.32),
+          grow: rand(8, 14),
+          gravity: 0,
+          drag: 0.6,
+          shade: Math.round(rand(95, 135)),
+        });
+      }
+    }
   }
 
   /** Clumps of dirt thrown out of a crater, in the ground's own color. */
@@ -177,8 +214,39 @@ export class Effects {
     }
   }
 
-  text(x, y, text, color = '#ffffff', size = 18) {
-    this.texts.push({ x, y, text, color, size, life: 0, maxLife: 1.3 });
+  text(x, y, text, color = '#ffffff', size = 18, extra = null) {
+    const t = { x, y, text, color, size, life: 0, maxLife: 1.3, ...extra };
+    this.texts.push(t);
+    return t;
+  }
+
+  /** Adds damage to a tank's recent floating number instead of stacking a new one. */
+  damageText(tankId, x, y, amount, color, size) {
+    const recent = this.texts.find((t) => t.tank === tankId && t.color === color && t.life < 0.7);
+    if (recent) {
+      recent.total += amount;
+      recent.text = `-${recent.total}`;
+      recent.life = Math.min(recent.life, 0.25);
+      return recent;
+    }
+    return this.text(x, y, `-${amount}`, color, size, { tank: tankId, total: amount });
+  }
+
+  /** Embers drifting up from burning napalm. */
+  ember(x, y) {
+    this.add({
+      type: 'spark',
+      x: x + rand(-3, 3),
+      y,
+      vx: rand(-12, 12),
+      vy: rand(-70, -35),
+      life: 0,
+      maxLife: rand(0.4, 0.9),
+      size: rand(1.2, 2.2),
+      gravity: -20,
+      drag: 1.2,
+      color: Math.random() < 0.5 ? '255,200,90' : '255,120,40',
+    });
   }
 
   update(dt, wind = 0) {
@@ -219,7 +287,7 @@ export class Effects {
     for (const p of this.particles) {
       if (p.type !== 'smoke' || p.life < 0) continue;
       const t = p.life / p.maxLife;
-      const alpha = (1 - t) * 0.45;
+      const alpha = (1 - t) * 0.34;
       ctx.fillStyle = `rgba(${p.shade},${p.shade},${p.shade},${alpha.toFixed(3)})`;
       ctx.beginPath();
       ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
@@ -241,8 +309,8 @@ export class Effects {
       if (ring.life < 0) continue;
       const t = ring.life / ring.duration;
       const r = ring.r + (ring.max - ring.r) * (1 - (1 - t) * (1 - t));
-      ctx.strokeStyle = `rgba(255,220,170,${((1 - t) * 0.55).toFixed(3)})`;
-      ctx.lineWidth = ring.width * (1 - t) + 0.5;
+      ctx.strokeStyle = `rgba(255,220,170,${((1 - t) * 0.42).toFixed(3)})`;
+      ctx.lineWidth = ring.width * 0.8 * (1 - t) + 0.5;
       ctx.beginPath();
       ctx.arc(ring.x, ring.y, r, 0, Math.PI * 2);
       ctx.stroke();

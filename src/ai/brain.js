@@ -91,7 +91,8 @@ export class Brain {
     const pending = m.pending;
     if (!pending || pending.turnId !== shot.turnId || this.personality(tank).wind !== 'estimate') return;
     const shooter = { id: tank.id, x: pending.x, y: pending.y };
-    const fitted = fitWind({ ...game.env, tanks: null }, shooter, shot.angle, shot.power, shot.impact.x);
+    // Fly the fitted shells through the same tanks so a shot stopped by a hull fits correctly.
+    const fitted = fitWind(game.env, shooter, shot.angle, shot.power, shot.impact.x);
     m.wind = m.windKnown ? m.wind * 0.3 + fitted * 0.7 : fitted;
     m.windKnown = true;
   }
@@ -132,7 +133,8 @@ export class Brain {
       case 'solid':
         return SOLID.find(usable) ?? FREE_WEAPON;
       case 'spotter':
-        if (m.shotsAtTarget === 0 && has('tracer') && m.tracedRound !== game.state.round && target.health > 40) {
+        // A tracer first, to read a strong wind, when there's time for it.
+        if (m.shotsAtTarget === 0 && has('tracer') && m.tracedRound !== game.state.round && target.health > 40 && Math.abs(game.state.wind) >= 5) {
           m.tracedRound = game.state.round;
           return 'tracer';
         }
@@ -165,7 +167,9 @@ export class Brain {
       m.targetId = -1;
       m.shotsAtTarget = 0;
     }
+    const sameTurn = this.turnId === s.turnId; // back after driving closer
     this.turnId = s.turnId;
+    if (!sameTurn) this.drives = 0;
     this.plan = null;
     this.job = null;
     this.retargeted = false;
@@ -180,7 +184,7 @@ export class Brain {
     const target = this.chooseTarget(game, tank, p);
     this.startPlan(game, tank, target);
     this.startTick = this.session.ticks;
-    this.thinkTicks = this.fast ? 0 : p.think[0] + this.rng.int(p.think[1] - p.think[0] + 1);
+    this.thinkTicks = this.fast ? 0 : sameTurn ? 4 : p.think[0] + this.rng.int(p.think[1] - p.think[0] + 1);
     this.stage = 'think';
   }
 
@@ -233,6 +237,14 @@ export class Brain {
     }
     if (!this.plan || this.session.ticks - this.startTick < this.thinkTicks) return;
     this.fallback = null;
+    // Out of reach (too weak to shoot that far, or a hill in the way)? Drive closer if we can.
+    if (this.plan.score > 140 && this.target && tank.stock.fuel > 0 && this.drives < 12 && this.weaponId !== 'riot') {
+      const dir = Math.sign(this.target.x - tank.x) || 1;
+      this.drives++;
+      this.stage = 'idle';
+      this.session.submit({ type: 'move', turnId: game.state.turnId, playerId: tank.id, dir });
+      return;
+    }
     const p = this.personality(tank);
     const m = this.mem(tank);
     const scale = p.learn ? Math.max(0.12, p.learn ** m.shotsAtTarget) : 1;

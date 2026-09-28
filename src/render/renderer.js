@@ -7,7 +7,7 @@ import { Phase, maxPower } from '../core/game.js';
 import { FREE_WEAPON, WEAPON_BY_ID } from '../core/weapons.js';
 import { LOOSE } from '../core/terrain.js';
 import { buildPalette, hexToRgb } from './palette.js';
-import { TerrainLayer } from './terrainLayer.js';
+import { TerrainLayer, makeCanvas } from './terrainLayer.js';
 import { Sky } from './sky.js';
 import { Effects } from './effects.js';
 
@@ -23,6 +23,48 @@ const shade = (hex, f) => {
 };
 
 const formatMoney = (n) => `$${Math.floor(n).toLocaleString('en-US')}`;
+
+// Colors of fire from white-hot (0) to smouldering (1+).
+const HEAT = [
+  [255, 255, 238],
+  [255, 236, 140],
+  [255, 170, 50],
+  [236, 82, 22],
+  [140, 30, 12],
+  [60, 14, 8],
+];
+
+function hot(t, alpha) {
+  const x = Math.max(0, Math.min(HEAT.length - 1.001, t * (HEAT.length - 1)));
+  const i = Math.floor(x);
+  const f = x - i;
+  const a = HEAT[i];
+  const b = HEAT[i + 1];
+  const c = (k) => Math.round(a[k] + (b[k] - a[k]) * f);
+  return `rgba(${c(0)},${c(1)},${c(2)},${Math.max(0, Math.min(1, alpha)).toFixed(3)})`;
+}
+
+/** Pre-rendered radial glows, drawn scaled instead of building gradients every frame. */
+function glowSprite(stops, size = 64) {
+  const canvas = makeCanvas(size, size);
+  const ctx = canvas.getContext('2d');
+  const grad = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  for (const [at, color] of stops) grad.addColorStop(at, color);
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, size, size);
+  return canvas;
+}
+
+const GLOW = {
+  fire: glowSprite([[0, 'rgba(255,190,90,0.55)'], [0.5, 'rgba(255,110,30,0.22)'], [1, 'rgba(255,60,0,0)']]),
+  white: glowSprite([[0, 'rgba(255,255,235,0.9)'], [0.4, 'rgba(255,245,200,0.35)'], [1, 'rgba(255,240,200,0)']]),
+  flame: glowSprite([[0, 'rgba(255,220,130,0.95)'], [0.35, 'rgba(255,120,25,0.6)'], [1, 'rgba(200,40,0,0)']]),
+  hotFlame: glowSprite([[0, 'rgba(255,250,200,1)'], [0.35, 'rgba(255,150,40,0.7)'], [1, 'rgba(220,50,0,0)']]),
+  shell: glowSprite([[0, 'rgba(255,235,180,0.95)'], [1, 'rgba(255,200,120,0)']]),
+  napalmShell: glowSprite([[0, 'rgba(255,160,60,0.95)'], [1, 'rgba(255,90,20,0)']]),
+  tracer: glowSprite([[0, 'rgba(140,255,180,0.95)'], [1, 'rgba(80,255,150,0)']]),
+  dirt: glowSprite([[0, 'rgba(210,160,100,0.8)'], [1, 'rgba(180,120,70,0)']]),
+};
 
 export class Renderer {
   constructor(canvas) {
@@ -115,13 +157,13 @@ export class Renderer {
       }
       case 'damage': {
         const tank = s.tanks[event.tank];
-        fx.text(tank.x, tank.y - 34, `-${event.amount}`, '#ff6a5a', 18);
-        this.fxFor(event.tank).hit = 0.35;
+        fx.damageText(event.tank, tank.x, tank.y - 34, event.amount, '#ff6a5a', 18);
+        this.fxFor(event.tank).hit = Math.max(this.fxFor(event.tank).hit, event.amount >= 5 ? 0.35 : 0.12);
         break;
       }
       case 'shieldDamage': {
         const tank = s.tanks[event.tank];
-        fx.text(tank.x, tank.y - 46, `-${event.amount}`, '#7fd8ff', 15);
+        fx.damageText(event.tank, tank.x, tank.y - 46, event.amount, '#7fd8ff', 15);
         this.fxFor(event.tank).shieldHit = 0.4;
         break;
       }
@@ -218,7 +260,7 @@ export class Renderer {
     for (const tank of s.tanks) this.drawTank(ctx, tank, game, session, view);
     this.drawTrails(ctx);
     this.drawProjectiles(ctx, s, view.time);
-    this.drawExplosions(ctx, s);
+    this.drawExplosions(ctx, s, view.time);
     this.effects.drawFront(ctx);
     this.drawLabels(ctx, s, session, view);
     this.effects.drawTexts(ctx, FONT);
@@ -337,16 +379,20 @@ export class Renderer {
       const weapon = WEAPON_BY_ID[p.weapon];
       const big = weapon?.radius >= 55 || p.kind === 'mirv';
       const r = p.child ? 2.4 : big ? 4.2 : 3;
-      const glow = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r * 3.5);
-      const hue = p.funky || p.kind === 'funky'
-        ? `hsla(${Math.round((time * 400 + p.id * 70) % 360)},100%,65%,`
-        : p.kind === 'napalm' ? 'rgba(255,140,40,' : p.kind === 'tracer' ? 'rgba(120,255,170,' : p.kind === 'dirt' ? 'rgba(200,150,90,' : 'rgba(255,230,170,';
-      glow.addColorStop(0, `${hue}0.9)`);
-      glow.addColorStop(1, `${hue}0)`);
-      ctx.fillStyle = glow;
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, r * 3.5, 0, TAU);
-      ctx.fill();
+      const g = r * 3.5;
+      if (p.funky || p.kind === 'funky') {
+        const hue = `hsla(${Math.round((time * 400 + p.id * 70) % 360)},100%,65%,`;
+        const glow = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, g);
+        glow.addColorStop(0, `${hue}0.9)`);
+        glow.addColorStop(1, `${hue}0)`);
+        ctx.fillStyle = glow;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, g, 0, TAU);
+        ctx.fill();
+      } else {
+        const sprite = p.kind === 'napalm' ? GLOW.napalmShell : p.kind === 'tracer' ? GLOW.tracer : p.kind === 'dirt' ? GLOW.dirt : GLOW.shell;
+        ctx.drawImage(sprite, p.x - g, p.y - g, g * 2, g * 2);
+      }
       ctx.fillStyle = p.kind === 'dirt' ? '#b98a55' : '#fff8e8';
       ctx.beginPath();
       ctx.arc(p.x, p.y, p.kind === 'dirt' ? r + 1.5 : r, 0, TAU);
@@ -391,60 +437,76 @@ export class Renderer {
     ctx.fill();
   }
 
-  drawExplosions(ctx, s) {
-    ctx.save();
-    ctx.globalCompositeOperation = 'lighter';
+  drawExplosions(ctx, s, time = 0) {
+    if (!s.explosions.length) return;
+    const shapes = [];
     for (const e of s.explosions) {
-      let t;
+      const life = e.grow + e.fade;
       let r;
+      let fade;
       if (e.age <= e.grow) {
-        t = e.age / e.grow;
-        r = e.radius * (0.25 + 0.75 * Math.sqrt(t));
+        const t = e.age / e.grow;
+        r = e.radius * (0.22 + 0.78 * (1 - (1 - t) * (1 - t)));
+        fade = 0;
       } else {
-        t = 1 + (e.age - e.grow) / e.fade;
-        const k = (e.age - e.grow) / e.fade;
-        r = e.radius * (1 - k * k * 0.85);
+        fade = (e.age - e.grow) / e.fade;
+        r = e.radius * (1 - 0.62 * fade * Math.sqrt(fade));
       }
-      const heat = Math.min(1, t / 2); // 0 = white hot, 1 = dull red
-      const core = `rgba(255,${Math.round(255 - heat * 120)},${Math.round(220 - heat * 200)},${(1 - heat * 0.6).toFixed(3)})`;
-      const mid = `rgba(255,${Math.round(170 - heat * 110)},${Math.round(40 - heat * 30)},${(0.85 - heat * 0.5).toFixed(3)})`;
-      const edge = `rgba(${Math.round(230 - heat * 90)},${Math.round(60 - heat * 40)},20,0)`;
-      const grad = ctx.createRadialGradient(e.x, e.y, 0, e.x, e.y, Math.max(1, r));
-      grad.addColorStop(0, core);
-      grad.addColorStop(0.55, mid);
-      grad.addColorStop(1, edge);
+      r *= 1 + 0.045 * Math.sin(time * 47 + e.x * 0.3);
+      // Heat runs from white-hot to dull red over the blast's life, with a flicker.
+      const heat = Math.min(1, Math.max(0, (e.age / life) * 1.05 + 0.07 * Math.sin(time * 31 + e.y)));
+      shapes.push({ e, r: Math.max(1, r), fade, heat });
+    }
+    // An opaque fiery body first, so blasts read against bright skies too…
+    for (const { e, r, fade, heat } of shapes) {
+      const alpha = 1 - fade * 0.8;
+      const grad = ctx.createRadialGradient(e.x, e.y, 0, e.x, e.y, r);
+      grad.addColorStop(0, hot(heat, alpha));
+      grad.addColorStop(0.5, hot(heat + 0.2, alpha * 0.95));
+      grad.addColorStop(0.82, hot(heat + 0.42, alpha * 0.7));
+      grad.addColorStop(1, hot(heat + 0.6, 0));
       ctx.fillStyle = grad;
       ctx.beginPath();
-      ctx.arc(e.x, e.y, Math.max(1, r), 0, TAU);
+      ctx.arc(e.x, e.y, r, 0, TAU);
       ctx.fill();
-      if (e.flash && e.age < e.grow + 4) {
-        const glow = ctx.createRadialGradient(e.x, e.y, r * 0.5, e.x, e.y, r * 2.4);
-        glow.addColorStop(0, 'rgba(255,255,230,0.5)');
-        glow.addColorStop(1, 'rgba(255,255,230,0)');
-        ctx.fillStyle = glow;
-        ctx.beginPath();
-        ctx.arc(e.x, e.y, r * 2.4, 0, TAU);
-        ctx.fill();
+    }
+    // …then light on top.
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (const { e, r, fade } of shapes) {
+      ctx.globalAlpha = (1 - fade) * (e.flash ? 0.8 : 0.45);
+      ctx.drawImage(GLOW.fire, e.x - r * 1.9, e.y - r * 1.9, r * 3.8, r * 3.8);
+      if (fade < 0.35) {
+        ctx.globalAlpha = (0.35 - fade) * 1.6;
+        ctx.drawImage(GLOW.white, e.x - r * 0.7, e.y - r * 0.7, r * 1.4, r * 1.4);
+      }
+      if (e.flash && e.age < e.grow + 8) {
+        ctx.globalAlpha = 0.6;
+        ctx.drawImage(GLOW.white, e.x - r * 2.8, e.y - r * 2.8, r * 5.6, r * 5.6);
       }
     }
+    ctx.globalAlpha = 1;
     ctx.restore();
   }
 
   drawNapalm(ctx, s, time) {
     if (!s.napalm.length) return;
+    // A few embers drift up from the fire each frame.
+    for (let i = 0; i < 2; i++) {
+      const n = s.napalm[Math.floor(Math.random() * s.napalm.length)];
+      if (n.flow) this.effects.ember(n.x, n.y - 4);
+    }
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
     for (const n of s.napalm) {
       const life = Math.min(1, n.life / 60);
-      const flicker = 0.75 + 0.25 * Math.sin(time * 18 + n.x * 0.7 + n.y);
-      const r = (5 + 4 * life) * flicker * (n.heat > 1 ? 1.25 : 1);
-      const glow = ctx.createRadialGradient(n.x, n.y - 2, 0, n.x, n.y - 2, r * 2.2);
-      glow.addColorStop(0, `rgba(255,${n.heat > 1 ? 240 : 210},120,${(0.8 * life).toFixed(3)})`);
-      glow.addColorStop(0.4, `rgba(255,110,20,${(0.55 * life).toFixed(3)})`);
-      glow.addColorStop(1, 'rgba(200,40,0,0)');
-      ctx.fillStyle = glow;
-      ctx.fillRect(n.x - r * 2.2, n.y - 2 - r * 2.2, r * 4.4, r * 4.4);
+      const flicker = 0.72 + 0.28 * Math.sin(time * 19 + n.x * 0.7 + n.y * 1.3);
+      const r = (6 + 4 * life) * flicker * (n.heat > 1 ? 1.2 : 1);
+      ctx.globalAlpha = 0.85 * life;
+      // Flames are taller than they are wide.
+      ctx.drawImage(n.heat > 1 ? GLOW.hotFlame : GLOW.flame, n.x - r * 0.8, n.y - 2 - r * 2, r * 1.6, r * 2.4);
     }
+    ctx.globalAlpha = 1;
     ctx.restore();
   }
 
@@ -777,7 +839,7 @@ export class Renderer {
     ctx.fillText(who, 32, 27, 150);
     ctx.font = `600 11px ${FONT}`;
     ctx.fillStyle = 'rgba(190,205,230,0.8)';
-    const role = tank.ai ? `AI · ${tank.ai}` : session.controls(tank.id) ? (session.online ? 'You' : 'Human') : 'Remote player';
+    const role = tank.ai ? `AI · ${tank.ai.charAt(0).toUpperCase()}${tank.ai.slice(1)}` : session.controls(tank.id) ? (session.online ? 'You' : 'Human') : 'Remote player';
     ctx.fillText(role, 32, 42);
     const left = session.turnTimeLeft();
     if (left !== null) {

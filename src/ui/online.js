@@ -125,9 +125,8 @@ export class Lobby {
           this.codeEl,
           inviteLink ? h('button', { class: 'btn small', id: 'btn-copy-invite', onclick: () => onCopy(inviteLink), text: 'Copy invite link' }) : null)),
       h('div', { class: 'lobby-grid' },
-        h('div', {}, h('h3', { text: 'Tanks' }), this.players, this.addAiRow),
+        h('div', {}, h('h3', { text: 'Tanks' }), this.players, this.addAiRow, this.note),
         h('div', {}, h('h3', { text: 'Settings' }), this.settingsBox)),
-      this.note,
       h('div', { class: 'row end' }, h('button', { class: 'btn', onclick: onLeave, text: 'Leave' }), this.startButton));
     this.lastPlayers = '';
     this.lastSettings = '';

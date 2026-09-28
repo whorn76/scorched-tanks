@@ -87,7 +87,7 @@ export function hashGame(game) {
   const s = game.state;
   const h = new Hasher();
   h.int(s.v).str(s.phase).int(s.round).int(s.turnId).int(s.active).num(s.wind);
-  h.str(s.walls).str(s.sky).int(s.ground).str(s.style).u32(s.rng.state).int(s.tick);
+  h.str(s.walls).str(s.sky).int(s.ground).str(s.style).u32(s.rng.state).int(s.tick).int(s.roundTurns ?? 0);
   h.int(s.quiet).int(s.quietNeeded).bool(s.pendingTurnEnd).int(s.nextId);
   for (const key of Object.keys(s.settings).sort()) h.str(key).str(s.settings[key]);
   h.u32(s.tanks.length);

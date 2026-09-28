@@ -20,6 +20,7 @@ import {
   TANK,
   TERRAIN_STYLES,
   TIMING,
+  TURNS_PER_TANK,
   WALL_MODES,
   WIDTH,
   WIND_ACCEL,
@@ -116,6 +117,7 @@ export function createState({ settings, players }) {
     roundInfo: null, // { heights, colorSeed } of the current round, to rebuild the base terrain
     rng: new Rng(1),
     tick: 0,
+    roundTurns: 0,
     quiet: 0,
     quietNeeded: 1,
     pendingTurnEnd: false,
@@ -337,6 +339,7 @@ export class Game {
     s.results = null;
     s.lastShot = null;
     s.tick = 0;
+    s.roundTurns = 1;
     s.quiet = 0;
     s.pendingTurnEnd = false;
     s.tanks.forEach((tank, i) => this.resetTankForRound(tank, cmd.xs[i], heights[cmd.xs[i]]));
@@ -860,7 +863,7 @@ export class Game {
         }
       }
       if (!count) continue;
-      tank.burn += heat * 0.02;
+      tank.burn += heat * 0.016;
       if (tank.burn >= 1) {
         const dmg = Math.floor(tank.burn);
         tank.burn -= dmg;
@@ -879,8 +882,8 @@ export class Game {
       damage,
       owner,
       age: 0,
-      grow: Math.max(5, Math.round(radius / 4)),
-      fade: Math.max(8, Math.round(radius / 3)),
+      grow: Math.max(6, Math.round(radius / 3.5)),
+      fade: Math.max(10, Math.round(radius / 2.5)),
       flash,
       kind,
       carve,
@@ -1129,8 +1132,19 @@ export class Game {
       return;
     }
     const active = s.tanks[s.active];
-    if (s.pendingTurnEnd || !active?.alive) this.nextTurn();
-    else s.phase = Phase.AIM;
+    if (s.pendingTurnEnd || !active?.alive) {
+      // A round can't go on forever (say, two wrecked tanks too weak to reach each other).
+      if (s.roundTurns >= this.turnLimit()) {
+        this.endRound(true);
+        return;
+      }
+      this.nextTurn();
+    } else s.phase = Phase.AIM;
+  }
+
+  /** Turns in a round before time is called: plenty for every tank to get its shots in. */
+  turnLimit() {
+    return TURNS_PER_TANK * this.state.tanks.length;
   }
 
   nextTurn() {
@@ -1152,15 +1166,22 @@ export class Game {
     const tank = s.tanks[s.active];
     if (tank.weapon !== FREE_WEAPON && !(tank.stock[tank.weapon] > 0)) tank.weapon = FREE_WEAPON;
     s.turnId++;
+    s.roundTurns++;
     s.phase = Phase.AIM;
     this.refreshEnv();
     this.emit({ type: 'turn', tank: s.active, turnId: s.turnId });
   }
 
-  endRound() {
+  /** Ends the round. With `timeUp`, the healthiest survivor wins (if there's a single one). */
+  endRound(timeUp = false) {
     const s = this.state;
     const alive = s.tanks.filter((t) => t.alive);
-    const winner = alive.length === 1 ? alive[0].id : -1;
+    let winner = alive.length === 1 ? alive[0].id : -1;
+    if (timeUp && alive.length > 1) {
+      const best = Math.max(...alive.map((t) => t.health));
+      const leaders = alive.filter((t) => t.health === best);
+      if (leaders.length === 1) winner = leaders[0].id;
+    }
     const dead = s.deaths.length;
     const earnings = s.tanks.map((tank) => {
       const deathIndex = s.deaths.indexOf(tank.id);
@@ -1177,9 +1198,9 @@ export class Game {
         total: tank.round.earned + bonus,
       };
     });
-    s.results = { round: s.round, winner, earnings };
+    s.results = { round: s.round, winner, earnings, timeUp };
     s.phase = Phase.ROUND_OVER;
-    this.emit({ type: 'roundOver', round: s.round, winner });
+    this.emit({ type: 'roundOver', round: s.round, winner, timeUp });
   }
 
   // --- Queries -------------------------------------------------------------------------------

@@ -54,6 +54,9 @@ export const TIMING = {
   maxProjectileAge: 60 * 25, // shells that fly this long are dropped
 };
 
+/** A round ends after this many turns per tank; the healthiest survivor wins. */
+export const TURNS_PER_TANK = 25;
+
 export const DEATH_BLAST = { radius: 48, damage: 45 };
 
 export const WALL_MODES = ['open', 'wrap', 'rubber', 'concrete'];

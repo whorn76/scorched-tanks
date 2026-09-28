@@ -345,6 +345,27 @@ test('broken snapshots are rejected', async () => {
   await assert.rejects(loadSnapshot({ ...snap, state: { ...snap.state, tanks: [] } }));
   await assert.rejects(loadSnapshot({ ...snap, terrain: { ...snap.terrain, packedLength: 1 } }));
   await assert.rejects(loadSnapshot({ ...snap, terrain: { ...snap.terrain, method: 'deflate', data: 'AAAAAAAA' } }));
+  await assert.rejects(loadSnapshot({ ...snap, state: { ...snap.state, phase: 'busy' } }), 'never taken mid-flight');
+});
+
+test('snapshots with missing or junk fields load safely', async () => {
+  const game = flatGame();
+  const snap = JSON.parse(JSON.stringify(await makeSnapshot(game)));
+  delete snap.state.tanks[0].stats;
+  delete snap.state.tanks[1].round;
+  snap.state.tanks[1].weapon = 'constructor';
+  snap.state.wind = 'gale';
+  snap.state.walls = { evil: true };
+  snap.state.projectiles = [{ x: 'NaN' }];
+  const copy = await loadSnapshot(snap);
+  assert.equal(copy.state.tanks[0].stats.kills, 0);
+  assert.equal(copy.state.tanks[1].round.damage, 0);
+  assert.equal(copy.state.tanks[1].weapon, 'baby');
+  assert.equal(copy.state.wind, 0);
+  assert.equal(copy.state.walls, 'open');
+  assert.deepEqual(copy.state.projectiles, []);
+  assert.match(hashGame(copy), /^[0-9a-f]{16}$/);
+  fireAndSettle(copy, { angle: 70, power: 400 });
 });
 
 test('the hash notices any change to the world', () => {
@@ -397,6 +418,20 @@ test('driving uses fuel, climbs gentle slopes and stops at cliffs', () => {
   assert.ok(tank.stock.fuel < 400);
   assert.ok(tank.x < 1000 - TANK.foot, 'the cliff stopped it');
   assert.equal(game.state.active, 0, 'driving does not end the turn');
+});
+
+test('a round that drags on ends on time and the healthiest tank wins', () => {
+  const game = flatGame({ xs: [300, 900], settings: { wind: 'off' } });
+  const s = game.state;
+  s.tanks[1].health = 40;
+  s.roundTurns = game.turnLimit() - 1;
+  fireAndSettle(game, { angle: 90, power: 0, weaponId: 'baby' });
+  assert.equal(s.phase, Phase.AIM, 'the last allowed turn still happens');
+  s.tanks[0].health = 90;
+  fireAndSettle(game, { angle: 90, power: 50, weaponId: 'baby', playerId: s.active });
+  assert.equal(s.phase, Phase.ROUND_OVER);
+  assert.equal(s.results.timeUp, true);
+  assert.equal(s.results.winner, s.tanks[0].health > s.tanks[1].health ? 0 : 1);
 });
 
 test('the direct-hit code reports which tank was hit', () => {

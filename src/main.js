@@ -1,7 +1,7 @@
 // Wires the game together: sessions, the fixed-timestep loop, input, rendering and the menus.
-import { DT, MAX_POWER, TANK, TANK_COLORS, WIDTH } from './core/constants.js';
+import { DEFAULT_SETTINGS, DT, MAX_POWER, TANK, TANK_COLORS, WIDTH } from './core/constants.js';
 import { Phase, maxPower } from './core/game.js';
-import { FREE_WEAPON, WEAPONS } from './core/weapons.js';
+import { FREE_WEAPON, WEAPONS, WEAPON_BY_ID } from './core/weapons.js';
 import { hashGame } from './core/hash.js';
 import { LocalSession } from './session/session.js';
 import { HostSession, resolveAiLevel } from './session/host.js';
@@ -10,18 +10,24 @@ import { normalizeRoomCode } from './net/protocol.js';
 import { hostRelay, joinRelay, normalizeRelayUrl, sameOriginRelayUrl } from './net/relayTransport.js';
 import { hostPeer, joinPeer } from './net/peerTransport.js';
 import { Renderer } from './render/renderer.js';
+import { Bubbles } from './render/bubbles.js';
+import { Sound } from './audio.js';
+import { quipFor } from './quips.js';
 import { Input } from './input.js';
 import { h } from './ui/dom.js';
 import * as screens from './ui/screens.js';
 import { Lobby, hostScreen, joinScreen, waitingScreen } from './ui/online.js';
 import { ChatBox } from './ui/chat.js';
 import { Shop } from './ui/shop.js';
+import { TouchControls } from './ui/touch.js';
 import { loadLineup, loadMuted, loadOnline, loadSettings, saveLineup, saveMuted, saveOnline, saveSettings } from './storage.js';
 
 const canvas = document.getElementById('game');
 const uiRoot = document.getElementById('ui');
 const toasts = document.getElementById('toasts');
 const renderer = new Renderer(canvas);
+const bubbles = new Bubbles();
+renderer.bubbles = bubbles;
 const input = new Input(canvas);
 const chat = new ChatBox(document.getElementById('chat'));
 
@@ -50,7 +56,15 @@ const app = {
   joinCode: '',
   message: null,
   busy: false,
+  demo: null,
+  demoEndedAt: 0,
 };
+
+const sound = new Sound({ volume: app.settings.volume, muted: app.muted });
+for (const type of ['pointerdown', 'keydown']) window.addEventListener(type, () => sound.unlock(), { capture: true });
+uiRoot.addEventListener('click', (e) => {
+  if (e.target.closest?.('button')) sound.play({ type: 'click' });
+});
 
 // --- Overlays --------------------------------------------------------------------------------
 
@@ -205,6 +219,8 @@ function openSettings(back) {
 function settingsChanged(settings) {
   app.settings = settings;
   saveSettings(settings);
+  sound.setVolume(settings.volume);
+  if (!settings.talk) bubbles.clear();
 }
 
 function closeModal() {
@@ -215,6 +231,7 @@ function closeModal() {
 function toggleMute() {
   app.muted = !app.muted;
   saveMuted(app.muted);
+  sound.setMuted(app.muted);
   toast(app.muted ? 'Sound off' : 'Sound on');
 }
 
@@ -241,6 +258,7 @@ function startSession(session) {
   app.overlayKey = '(reset)';
   document.activeElement?.blur?.();
   renderer.resetRound();
+  bubbles.clear();
   input.releaseAll();
   chat.clear();
 }
@@ -445,7 +463,8 @@ function useItem(kind) {
 
 function drive(now) {
   const aim = app.aim;
-  if (!aim || aim.fired || !input.driving || !app.session.game.isIdle()) return;
+  const dir = input.driving || touch.driving;
+  if (!aim || aim.fired || !dir || !app.session.game.isIdle()) return;
   const tank = app.session.state.tanks[aim.playerId];
   if (!(tank.stock.fuel > 0)) {
     if (!app.noFuelWarned) toast('No fuel. Buy some in the shop to drive.');
@@ -454,7 +473,7 @@ function drive(now) {
   }
   if (app.session.online && now - (app.lastMoveAt ?? 0) < 120) return; // one request in flight
   app.lastMoveAt = now;
-  app.session.submit({ type: 'move', turnId: aim.turnId, playerId: aim.playerId, dir: input.driving });
+  app.session.submit({ type: 'move', turnId: aim.turnId, playerId: aim.playerId, dir });
 }
 
 function dragAim(event) {
@@ -506,7 +525,9 @@ input.on('help', () => {
   if (!app.session) go(app.screen === 'help' ? 'title' : 'help');
   else app.modal = app.modal === 'help' ? null : 'help';
 });
-input.on('pause', () => {
+input.on('pause', () => togglePause());
+
+function togglePause() {
   if (!app.session) {
     if (app.message) app.message = null;
     else if (app.screen !== 'title') go('title');
@@ -518,6 +539,16 @@ input.on('pause', () => {
     app.modal = 'pause';
     app.paused = !app.session.online;
   }
+}
+
+const touch = new TouchControls(document.getElementById('touch'), {
+  aim: (kind, dir) => changeAim(kind, kind === 'angle' ? dir : dir * 5),
+  aimRate: (kind, amount) => changeAim(kind, amount * (kind === 'angle' ? 22 : 90)),
+  weapon: (dir) => cycleWeapon(dir),
+  fire: () => fire(),
+  shield: () => useItem('shield'),
+  battery: () => useItem('battery'),
+  menu: () => togglePause(),
 });
 
 window.addEventListener('resize', () => renderer.resize());
@@ -530,18 +561,46 @@ document.addEventListener('visibilitychange', () => {
 
 // --- Loop ------------------------------------------------------------------------------------
 
-function handleEvents(session) {
+/** Tanks talk when they fire, get hit, die or score a kill (if talking tanks is on). */
+function talk(event, game) {
+  if (!app.settings.talk) return;
+  const s = game.state;
+  switch (event.type) {
+    case 'fire':
+      bubbles.say(event.tank, quipFor('fire', s.turnId, event.tank));
+      break;
+    case 'damage':
+      if (event.amount >= 20 && s.tanks[event.tank]?.alive) bubbles.say(event.tank, quipFor('hit', s.turnId, event.tank, event.amount));
+      break;
+    case 'death':
+      bubbles.say(event.tank, quipFor('death', s.turnId, event.tank));
+      if (event.killer >= 0 && event.killer !== event.tank) bubbles.say(event.killer, quipFor('kill', s.turnId, event.killer), 1.4);
+      break;
+    case 'round':
+      bubbles.clear();
+      break;
+  }
+}
+
+function handleEvents(session, { quiet = false } = {}) {
   for (const event of session.drainEvents()) {
-    if (session.game) renderer.handleEvent(event, session.game);
+    if (session.game) {
+      renderer.handleEvent(event, session.game);
+      talk(event, session.game);
+    }
+    if (!quiet) sound.play(event);
     switch (event.type) {
       case 'turn':
         app.noFuelWarned = false;
+        if (!quiet && session.controls(event.tank) && !session.game?.state.tanks[event.tank]?.ai) sound.play({ type: 'yourTurn' });
         break;
       case 'chat':
         chat.add(event);
         break;
       case 'net':
         toast(event.text, event.level === 'error' ? 'error' : '');
+        // The host turned down our last move: let the player try again.
+        if (app.aim && session.online && !session.isAuthority) app.aim.fired = false;
         break;
       case 'timeout':
         if (session.controls(event.tank)) toast('Time is up! Firing.');
@@ -550,46 +609,130 @@ function handleEvents(session) {
   }
 }
 
+/** An AI-vs-AI battle that plays behind the title menu. */
+function makeDemo() {
+  const crew = [
+    ['Unit 7', 'cyborg'],
+    ['Hawkeye', 'spotter'],
+    ['Sarge', 'gunner'],
+    ['Private Pip', 'rookie'],
+  ];
+  const players = crew.map(([name, ai], i) => ({ name, color: TANK_COLORS[(i + app.demoCount) % TANK_COLORS.length], ai }));
+  app.demoCount = (app.demoCount ?? 0) + 1;
+  const settings = { ...DEFAULT_SETTINGS, rounds: 1, startCash: 0, turnTimer: 0, wind: 'medium', talk: app.settings.talk };
+  const demo = new LocalSession({ settings, players });
+  demo.start();
+  demo.commit(demo.planNextRound());
+  return demo;
+}
+
+function stepDemo(dt, now) {
+  if (!app.demo) {
+    app.demoCount = app.demoCount ?? 0;
+    app.demo = makeDemo();
+    app.demoAcc = 0;
+    renderer.resetRound();
+    bubbles.clear();
+  }
+  const demo = app.demo;
+  app.demoAcc += dt;
+  let steps = 0;
+  while (app.demoAcc >= DT && steps < 4) {
+    demo.update();
+    app.demoAcc -= DT;
+    steps++;
+  }
+  if (steps === 4) app.demoAcc = 0;
+  handleEvents(demo, { quiet: true });
+  const over = demo.game.phase === Phase.ROUND_OVER || demo.game.phase === Phase.GAME_OVER;
+  if (over && !app.demoEndedAt) app.demoEndedAt = now;
+  if (over && now - app.demoEndedAt > 3500) {
+    app.demo = null;
+    app.demoEndedAt = 0;
+  }
+}
+
 let last = performance.now();
 let accumulator = 0;
 
+/** Advances the running session by the real time that has passed (at most `maxSteps` ticks). */
+function stepSession(session, dt, maxSteps) {
+  accumulator += dt;
+  let steps = 0;
+  while (accumulator >= DT && steps < maxSteps) {
+    session.update();
+    accumulator -= DT;
+    steps++;
+  }
+  if (steps === maxSteps) accumulator = 0;
+}
+
+// Browsers stop animation frames in background tabs. Online, everyone else is waiting on us
+// (especially on the host), so keep the simulation going on a timer while hidden.
+setInterval(() => {
+  const session = app.session;
+  if (!document.hidden || !session?.online) return;
+  const now = performance.now();
+  const dt = Math.min(2, (now - last) / 1000);
+  last = now;
+  stepSession(session, dt, 240);
+  handleEvents(session);
+}, 250);
+
 function frame(now) {
+  try {
+    runFrame(now);
+  } catch (error) {
+    // Never let one bad frame stop the loop for good.
+    if (!app.frameError) console.error('frame failed', error);
+    app.frameError = error;
+  }
+  requestAnimationFrame(frame);
+}
+
+function runFrame(now) {
   const dt = Math.min(0.25, (now - last) / 1000);
   last = now;
   const session = app.session;
+  const playing = !!session && (!session.online || session.status === 'playing') && !!session.game;
   if (session) {
-    if (!app.paused || session.online) {
-      accumulator += dt;
-      let steps = 0;
-      while (accumulator >= DT && steps < 8) {
-        session.update();
-        accumulator -= DT;
-        steps++;
-      }
-      if (steps === 8) accumulator = 0;
-    }
+    if (!app.paused || session.online) stepSession(session, dt, 8);
     handleEvents(session);
     if (session.game) {
       syncAim();
       input.enabled = !!app.aim && !app.modal && !chat.isOpen;
       input.update(dt);
+      touch.update(dt);
       drive(now);
       sendAimPreview(now);
     }
   }
+  if (playing) {
+    if (app.demo) {
+      app.demo = null;
+      renderer.resetRound();
+      bubbles.clear();
+    }
+  } else {
+    stepDemo(dt, now);
+  }
   syncOverlay();
+  const weapon = app.aim ? WEAPON_BY_ID[app.aim.weaponId] : null;
+  touch.sync({ inGame: playing, myTurn: !!app.aim && !app.modal, weaponName: weapon?.name });
+  const shown = playing ? session : app.demo;
+  const battle = playing && (session.game.phase === Phase.AIM || session.game.phase === Phase.BUSY);
+  bubbles.update(dt);
+  sound.update(playing ? session.game : null);
   const guide = app.drag && app.aim ? { x: app.drag.x, y: app.drag.y, angle: app.aim.angle, power: app.aim.power } : null;
-  const inLobby = session?.online && session.status !== 'playing';
   renderer.draw({
-    session: inLobby ? null : session,
+    session: shown,
     time: now / 1000,
     dt,
-    aim: app.aim,
-    aimGuide: guide,
-    hideHud: !session || inLobby,
-    dim: session && app.modal ? 0.35 : 0,
+    aim: playing ? app.aim : null,
+    aimGuide: playing ? guide : null,
+    hideHud: !battle,
+    dim: playing ? (app.modal ? 0.35 : 0) : 0.28,
   });
-  requestAnimationFrame(frame);
 }
 
 requestAnimationFrame(frame);

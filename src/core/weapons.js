@@ -51,8 +51,11 @@ export const ITEMS = [
   { id: 'fuel', name: 'Fuel', price: 1500, bundle: 150, blurb: 'Drive with A and D. Slopes cost more.' },
 ];
 
-export const WEAPON_BY_ID = Object.fromEntries(WEAPONS.map((w) => [w.id, w]));
-export const ITEM_BY_ID = Object.fromEntries(ITEMS.map((item) => [item.id, item]));
+// Lookup tables without a prototype, so names like "constructor" or "__proto__" never match.
+const table = (rows) => Object.assign(Object.create(null), Object.fromEntries(rows.map((row) => [row.id, row])));
+
+export const WEAPON_BY_ID = table(WEAPONS);
+export const ITEM_BY_ID = table(ITEMS);
 export const WEAPON_IDS = WEAPONS.map((w) => w.id);
 export const ITEM_IDS = ITEMS.map((item) => item.id);
 /** Every inventory key, in the fixed order used for hashing and snapshots. */
@@ -61,7 +64,7 @@ export const FREE_WEAPON = 'baby';
 export const MAX_STOCK = 99;
 export const MAX_FUEL = 999;
 
-export const isWeapon = (id) => Object.hasOwn(WEAPON_BY_ID, id);
-export const isItem = (id) => Object.hasOwn(ITEM_BY_ID, id);
-export const productById = (id) => WEAPON_BY_ID[id] ?? ITEM_BY_ID[id] ?? null;
+export const isWeapon = (id) => typeof id === 'string' && Object.hasOwn(WEAPON_BY_ID, id);
+export const isItem = (id) => typeof id === 'string' && Object.hasOwn(ITEM_BY_ID, id);
+export const productById = (id) => (isWeapon(id) ? WEAPON_BY_ID[id] : isItem(id) ? ITEM_BY_ID[id] : null);
 export const stockLimit = (id) => (id === 'fuel' ? MAX_FUEL : MAX_STOCK);

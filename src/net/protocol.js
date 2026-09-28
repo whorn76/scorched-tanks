@@ -103,7 +103,7 @@ export function parseGuestMessage(msg) {
 // --- Host → guest ------------------------------------------------------------------------------
 
 const cleanLobbyPlayer = (p) => {
-  if (!isObject(p) || !isInt(p.slot, 0, 64)) return null;
+  if (!isObject(p) || !isInt(p.slot, 0, 1e9)) return null;
   const kind = ['host', 'guest', 'ai'].includes(p.kind) ? p.kind : null;
   if (!kind) return null;
   return {
@@ -120,7 +120,7 @@ export function parseHostMessage(msg) {
   if (!isObject(msg) || typeof msg.t !== 'string') return null;
   switch (msg.t) {
     case 'welcome':
-      return isInt(msg.v, 0, 1e6) && isInt(msg.slot, 0, 64) ? { t: 'welcome', v: msg.v, slot: msg.slot } : null;
+      return isInt(msg.v, 0, 1e6) && isInt(msg.slot, 0, 1e9) ? { t: 'welcome', v: msg.v, slot: msg.slot } : null;
     case 'reject':
       return { t: 'reject', reason: cleanText(msg.reason, 200) || 'Rejected by the host.' };
     case 'lobby': {

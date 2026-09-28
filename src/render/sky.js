@@ -172,10 +172,13 @@ export class Sky {
   /** Draws the sky. `wind` nudges clouds and rain; `dt` is the frame time in seconds. */
   draw(ctx, time, dt, wind) {
     ctx.drawImage(this.canvas, 0, 0, WIDTH, HEIGHT);
-    for (const star of this.stars) {
-      const a = 0.45 + 0.55 * Math.abs(Math.sin(time * star.speed + star.phase));
-      ctx.fillStyle = `rgba(255,255,240,${a.toFixed(3)})`;
-      ctx.fillRect(star.x, star.y, star.r, star.r);
+    if (this.stars.length) {
+      ctx.fillStyle = '#fffff0';
+      for (const star of this.stars) {
+        ctx.globalAlpha = 0.45 + 0.55 * Math.abs(Math.sin(time * star.speed + star.phase));
+        ctx.fillRect(star.x, star.y, star.r, star.r);
+      }
+      ctx.globalAlpha = 1;
     }
     for (const cloud of this.clouds) {
       cloud.x += (cloud.speed * 6 + wind * 2.2) * dt;

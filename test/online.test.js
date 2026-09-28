@@ -7,6 +7,7 @@ import { Brain } from '../src/ai/brain.js';
 import { Phase } from '../src/core/game.js';
 import { hashGame } from '../src/core/hash.js';
 import { PROTOCOL_VERSION } from '../src/net/protocol.js';
+import { flatGame } from './helpers.js';
 
 const yieldToEventLoop = () => new Promise((resolve) => setImmediate(resolve));
 
@@ -235,4 +236,62 @@ test('guests see each other’s aim previews and chat', async () => {
     assert.deepEqual(watcher.previews.get(shooter.you), { angle: 77, power: 432, weaponId: 'baby' });
     assert.deepEqual(room.host.previews.get(shooter.you), { angle: 77, power: 432, weaponId: 'baby' });
   }
+});
+
+test('a guest who leaves while the game is starting is handed to the AI', async () => {
+  const room = makeRoom({ guests: 2, settings: { rounds: 1, startCash: 5000 } });
+  const [stayer, leaver] = room.guests;
+  const starting = room.host.startGame();
+  leaver.close(); // before the starting snapshot has even been sent
+  room.hub.flush();
+  await starting;
+  room.hub.flush();
+  const deadline = Date.now() + 5000;
+  while (!stayer.game && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 2));
+  const leaverId = room.host.lobbyPlayers.find((p) => p.name === 'Guest 2').playerId;
+  await play({ hub: room.hub, host: room.host, guests: [stayer] });
+  assert.equal(room.host.game.state.tanks[leaverId].ai, 'gunner', 'the AI took over');
+  assert.equal(room.host.game.phase, Phase.GAME_OVER, 'and the shop did not wait for the missing player');
+  assertInSync(room.host, [stayer]);
+});
+
+test('a guest that misses a command asks for a snapshot and catches up', async () => {
+  const room = makeRoom({ guests: 1, settings: { rounds: 1 } });
+  await startRoom(room, []);
+  const guest = room.guests[0];
+  // Lose exactly one command on its way to the guest.
+  const original = guest.onMessage.bind(guest);
+  let dropped = false;
+  guest.conn.messageHandlers[0] = (msg) => {
+    if (!dropped && msg.t === 'cmd' && msg.cmd.type === 'shot') {
+      dropped = true;
+      return;
+    }
+    original(msg);
+  };
+  await play(room);
+  assert.ok(dropped);
+  assert.ok(guest.stats.resyncs >= 1, 'it noticed the gap');
+  assert.equal(hashGame(guest.game), hashGame(room.host.game));
+  assert.equal(room.host.game.phase, Phase.GAME_OVER);
+});
+
+test('chat floods from one guest are throttled before reaching the others', () => {
+  const room = makeRoom({ guests: 2 });
+  const [spammer, reader] = room.guests;
+  reader.drainEvents();
+  for (let i = 0; i < 40; i++) spammer.sendChat(`spam ${i}`);
+  room.hub.flush();
+  const received = reader.drainEvents().filter((e) => e.type === 'chat' && !e.system).length;
+  assert.ok(received >= 1 && received <= 5, `${received} of 40 got through`);
+});
+
+test('commands naming inherited object properties are rejected, not applied', () => {
+  const game = flatGame();
+  game.state.phase = Phase.SHOP;
+  for (const item of ['constructor', '__proto__', 'toString', 'hasOwnProperty']) {
+    assert.equal(game.apply({ type: 'buy', playerId: 0, item }).ok, false, item);
+    assert.equal(game.apply({ type: 'sell', playerId: 0, item }).ok, false, item);
+  }
+  assert.ok(Number.isFinite(game.state.tanks[0].money));
 });
