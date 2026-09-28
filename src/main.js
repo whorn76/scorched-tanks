@@ -7,8 +7,8 @@ import { LocalSession } from './session/session.js';
 import { HostSession, resolveAiLevel } from './session/host.js';
 import { GuestSession } from './session/guest.js';
 import { normalizeRoomCode } from './net/protocol.js';
-import { hostRelay, joinRelay, normalizeRelayUrl, sameOriginRelayUrl } from './net/relayTransport.js';
-import { hostPeer, joinPeer } from './net/peerTransport.js';
+import { detectSameOriginRelay, hostRelay, joinRelay, normalizeRelayUrl, relayUrlProblem } from './net/relayTransport.js';
+import { hostPeer, joinPeer, turnProblem } from './net/peerTransport.js';
 import { Renderer } from './render/renderer.js';
 import { Bubbles } from './render/bubbles.js';
 import { Sound } from './audio.js';
@@ -58,6 +58,8 @@ const app = {
   busy: false,
   demo: null,
   demoEndedAt: 0,
+  sameOriginRelay: '', // this site's relay address, if it runs one
+  relayChecked: false,
 };
 
 const sound = new Sound({ volume: app.settings.volume, muted: app.muted });
@@ -112,9 +114,9 @@ function menuOverlay() {
     case 'help':
       return ['help', () => screens.helpScreen({ onClose: () => go('title') })];
     case 'host':
-      return ['host', () => hostScreen(app.online, { sameOrigin: sameOriginRelayUrl(), onCreate: createRoom, onBack: () => go('title') })];
+      return [`host:${!!app.relayChecked}`, () => hostScreen(app.online, { sameOrigin: app.sameOriginRelay, onCreate: createRoom, onBack: () => go('title') })];
     case 'join':
-      return [`join:${app.joinCode}`, () => joinScreen(app.online, { sameOrigin: sameOriginRelayUrl(), code: app.joinCode, onJoin: joinRoom, onBack: () => go('title') })];
+      return [`join:${app.joinCode}:${!!app.relayChecked}`, () => joinScreen(app.online, { sameOrigin: app.sameOriginRelay, code: app.joinCode, onJoin: joinRoom, onBack: () => go('title') })];
     default:
       return [null, null];
   }
@@ -295,7 +297,20 @@ async function copyInvite(link) {
 }
 
 function iceOptions(opts) {
-  return { turnUrl: opts.turnUrl, turnUser: opts.turnUser, turnPass: opts.turnPass };
+  const ice = { turnUrl: opts.turnUrl, turnUser: opts.turnUser, turnPass: opts.turnPass };
+  const problem = turnProblem(ice);
+  if (problem) throw new Error(problem);
+  return ice;
+}
+
+/** The relay to use: the one typed in, or this site's own when it runs one. Throws if unusable. */
+async function relayAddress(opts) {
+  await app.relayProbe;
+  const url = normalizeRelayUrl(opts.relayUrl || app.sameOriginRelay);
+  if (opts.relayUrl && !url) throw new Error('That relay address does not look right. Paste the https:// address of the relay server.');
+  const problem = relayUrlProblem(url);
+  if (problem) throw new Error(problem);
+  return url;
 }
 
 function setStatus(ui, text, error = false) {
@@ -312,13 +327,13 @@ async function createRoom(opts, ui) {
   try {
     let transport;
     if (opts.transport === 'relay') {
-      const url = normalizeRelayUrl(opts.relayUrl || sameOriginRelayUrl());
-      if (!url) throw new Error('Enter the relay server address.');
+      const url = await relayAddress(opts);
       setStatus(ui, 'Opening a room on the relay…');
       transport = await hostRelay(url);
     } else {
+      const ice = iceOptions(opts);
       setStatus(ui, 'Contacting the PeerJS signaling server…');
-      transport = await hostPeer({ ice: iceOptions(opts), onStatus: (t) => setStatus(ui, t) });
+      transport = await hostPeer({ ice, onStatus: (t) => setStatus(ui, t) });
     }
     startSession(new HostSession({ transport, name: opts.name, settings: app.settings }));
   } catch (error) {
@@ -343,8 +358,7 @@ async function joinRoom(codeText, opts, ui) {
   try {
     let conn;
     if (opts.transport === 'relay') {
-      const url = normalizeRelayUrl(opts.relayUrl || sameOriginRelayUrl());
-      if (!url) throw new Error('Enter the relay server address.');
+      const url = await relayAddress(opts);
       setStatus(ui, 'Connecting to the relay…');
       conn = await joinRelay(url, code);
     } else {
@@ -360,6 +374,12 @@ async function joinRoom(codeText, opts, ui) {
 }
 
 chat.onSend((text) => app.session?.sendChat?.(text));
+
+// Offer this site as the relay only if it really runs one (not on GitHub Pages, for example).
+app.relayProbe = detectSameOriginRelay().then((url) => {
+  app.sameOriginRelay = url;
+  app.relayChecked = true;
+});
 
 /** Opening an invite link (…#join=CODE, optionally &relay=URL) goes straight to the join screen. */
 function readInvite() {

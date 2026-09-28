@@ -1,5 +1,6 @@
 // Runs the browser tests: makes sure Playwright's Chromium is installed, starts the game server
-// (with the relay) on a free port, runs e2e/*.e2e.mjs with Node's test runner, then shuts down.
+// (with the relay) and a GitHub Pages stand-in on free ports, runs e2e/*.e2e.mjs with Node's
+// test runner, then shuts everything down.
 import { spawnSync, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -23,15 +24,18 @@ if (!existsSync(chromium.executablePath())) {
 }
 
 const { startServer } = await import('../server/server.js');
+const { startStaticHost } = await import('./staticHost.mjs');
 const server = await startServer({ port: 0, host: '127.0.0.1', quiet: true });
 if (!server.relay) {
   console.error('The relay needs the "ws" package. Run "npm install" first.');
   await server.close();
   process.exit(1);
 }
+const staticHost = await startStaticHost(root);
 const baseUrl = `http://127.0.0.1:${server.port}/`;
 mkdirSync(join(root, 'test-results', 'e2e'), { recursive: true });
-console.log(`Game server at ${baseUrl}`);
+console.log(`Game server (with relay) at ${baseUrl}`);
+console.log(`Static host (like GitHub Pages) at ${staticHost.url}`);
 
 const files = readdirSync(here)
   .filter((f) => f.endsWith('.e2e.mjs'))
@@ -39,9 +43,10 @@ const files = readdirSync(here)
 const child = spawn(process.execPath, ['--test', '--test-concurrency=1', ...files], {
   cwd: root,
   stdio: 'inherit',
-  env: { ...process.env, E2E_BASE_URL: baseUrl },
+  env: { ...process.env, E2E_BASE_URL: baseUrl, E2E_STATIC_URL: staticHost.url },
 });
 const code = await new Promise((resolve) => child.on('exit', (c) => resolve(c ?? 1)));
 await server.close();
+await staticHost.close();
 console.log(`Screenshots are in ${join('test-results', 'e2e')}`);
 process.exit(code);

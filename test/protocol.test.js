@@ -10,8 +10,8 @@ import {
   parseGuestMessage,
   parseHostMessage,
 } from '../src/net/protocol.js';
-import { normalizeRelayUrl, sameOriginRelayUrl } from '../src/net/relayTransport.js';
-import { iceServers } from '../src/net/peerTransport.js';
+import { detectSameOriginRelay, normalizeRelayUrl, relayUrlProblem, sameOriginRelayUrl } from '../src/net/relayTransport.js';
+import { iceServers, turnProblem } from '../src/net/peerTransport.js';
 
 test('room codes are 5 characters from an alphabet without look-alikes', () => {
   for (const bad of '0O1IL5S2Z8BUV') assert.ok(!ROOM_ALPHABET.includes(bad), `${bad} is excluded`);
@@ -117,4 +117,36 @@ test('ICE servers include Google STUN and an optional TURN server', () => {
   const turn = withTurn.find((s) => Array.isArray(s.urls));
   assert.deepEqual(turn, { urls: ['turn:turn.example.com:3478', 'turns:turn.example.com:5349'], username: 'u', credential: 'p' });
   assert.equal(iceServers({ turnUrl: 'http://nope' }).length, 2, 'non-TURN URLs are ignored');
+  assert.equal(iceServers({ turnUrl: 'turn:x.example.com' }).length, 2, 'TURN without credentials is left out');
+  assert.equal(turnProblem({}), '');
+  assert.match(turnProblem({ turnUrl: 'turn:x.example.com' }), /username/);
+  assert.match(turnProblem({ turnUrl: 'x.example.com', turnUser: 'u', turnPass: 'p' }), /turn:/);
+  assert.equal(turnProblem({ turnUrl: 'turn:x.example.com', turnUser: 'u', turnPass: 'p' }), '');
+});
+
+test('the relay option only points at this site when it really runs a relay', async () => {
+  const calls = [];
+  const reply = (body, ok = true) => async (url) => {
+    calls.push(url);
+    return { ok, json: async () => body };
+  };
+  const pages = { protocol: 'https:', host: 'me.github.io', href: 'https://me.github.io/scorched-tanks/#join=ACEFG' };
+  assert.equal(await detectSameOriginRelay(pages, reply({ relay: false })), '');
+  assert.equal(calls[0], 'https://me.github.io/scorched-tanks/relay.json', 'asked next to the page, so subpaths work');
+  assert.equal(await detectSameOriginRelay(pages, reply({}, false)), '');
+  assert.equal(await detectSameOriginRelay(pages, async () => { throw new Error('offline'); }), '');
+  const tunnel = { protocol: 'https:', host: 'x.trycloudflare.com', href: 'https://x.trycloudflare.com/' };
+  assert.equal(await detectSameOriginRelay(tunnel, reply({ relay: true })), 'wss://x.trycloudflare.com/ws');
+  const lan = { protocol: 'http:', host: '192.168.1.5:8080', href: 'http://192.168.1.5:8080/index.html' };
+  assert.equal(await detectSameOriginRelay(lan, reply({ relay: true })), 'ws://192.168.1.5:8080/ws');
+  assert.equal(await detectSameOriginRelay({ protocol: 'file:', href: 'file:///C:/game/index.html' }, reply({ relay: true })), '');
+});
+
+test('relay addresses that cannot work from this page are explained', () => {
+  const https = { protocol: 'https:' };
+  assert.match(relayUrlProblem('', https), /npm start/);
+  assert.match(relayUrlProblem('ws://203.0.113.5:8080/ws', https), /https/, 'browsers block ws:// from https pages');
+  assert.equal(relayUrlProblem('ws://localhost:8080/ws', https), '');
+  assert.equal(relayUrlProblem('wss://x.trycloudflare.com/ws', https), '');
+  assert.equal(relayUrlProblem('ws://203.0.113.5:8080/ws', { protocol: 'http:' }), '');
 });

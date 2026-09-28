@@ -3,6 +3,10 @@ import { chromium } from 'playwright';
 import { join } from 'node:path';
 
 export const BASE_URL = process.env.E2E_BASE_URL || 'http://127.0.0.1:8080/';
+/** The same game on a static host under a subpath, like GitHub Pages (no relay there). */
+export const STATIC_URL = process.env.E2E_STATIC_URL || BASE_URL;
+/** The relay that BASE_URL's server runs. */
+export const RELAY_WS_URL = `${BASE_URL.replace(/^http/, 'ws')}ws`;
 export const SHOTS = join('test-results', 'e2e');
 
 export async function launch() {
@@ -10,8 +14,9 @@ export async function launch() {
 }
 
 /** A page that records console errors and uncaught exceptions. */
-export async function openPage(browser, { name = 'page', viewport = { width: 1280, height: 720 }, storage = null, url = BASE_URL } = {}) {
+export async function openPage(browser, { name = 'page', viewport = { width: 1280, height: 720 }, storage = null, url = BASE_URL, clipboard = false } = {}) {
   const context = await browser.newContext({ viewport });
+  if (clipboard) await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: new URL(url).origin });
   const page = await context.newPage();
   page.errors = [];
   page.on('console', (msg) => {

@@ -87,18 +87,20 @@ AIs also shop, raise shields, use batteries, drive closer when they can't reach,
 2. Friends choose **Join Online** and type the code, or just open the invite link (`…#join=CODE`), which goes straight to the join screen.
 3. The host picks the settings, can add AI tanks, and starts the game. Up to four people can play (the host plus three guests), with up to six tanks in total. There's a chat in the lobby and during the game (press T).
 
-**Peer-to-peer (default).** Players connect directly over WebRTC data channels, using the free public [PeerJS](https://peerjs.com) server only to find each other. You don't need to run any server; hosting the page anywhere, including GitHub Pages, is enough.
+**Peer-to-peer (default).** Players connect directly over WebRTC data channels, using the free public [PeerJS](https://peerjs.com) server only to find each other. You don't need to run any server; hosting the page anywhere, including GitHub Pages, is enough. This works on most home networks.
 
-**TURN server (optional).** Some networks, such as strict corporate firewalls and some mobile carriers, block direct connections. If joining times out, open **Advanced: TURN server** on the host and join screens and enter a TURN server (for example one from a hosted TURN provider). Both players should enter the same one.
+**When direct connections fail.** If both players are on strict networks (some mobile carriers, offices and schools), WebRTC can't connect directly, and joining times out after about 20 seconds. There's no free public TURN server to fall back on (the ones PeerJS used to list are gone), so use the relay server below, or enter your own TURN server under **Advanced: TURN server** on the host and join screens (for example from a hosted TURN provider). Both players should enter the same TURN server.
 
-**Relay server (fallback).** If peer-to-peer won't work at all, every message can go through a small relay instead. The relay is part of `npm start`: it serves the game and relays messages on `/ws`. To play over the internet, expose it with a tunnel:
+**Relay server (fallback).** Every message can go through a small relay instead, which works on nearly any network because it's an ordinary secure WebSocket. The relay is part of `npm start`: it serves the game and relays messages on `/ws`. To play over the internet, expose it with a tunnel:
 
 ```sh
 npm start
 cloudflared tunnel --url http://localhost:8080
 ```
 
-Share the `https://….trycloudflare.com` address it prints. Everyone opens that address, and the host picks **Relay server** before creating the room. The relay address defaults to the server the page came from. The invite link includes the relay address, so guests don't need to type it. You can also deploy the repository to a Node host such as Render (build command `npm install`, start command `npm start`) and use its URL the same way.
+Share the `https://….trycloudflare.com` address it prints. Everyone opens that address, and the host picks **Relay server** before creating the room; the relay address is filled in automatically because the page came from the relay. The invite link includes the relay address, so guests don't need to type it. You can also deploy the repository to a Node host such as Render (build command `npm install`, start command `npm start`) and use its URL the same way.
+
+If the game itself is on a static host such as GitHub Pages, run the relay somewhere else as above. Then the host pastes the relay's `https://` address into the **Relay server address** field, and the invite link passes it to everyone else. Use the https address: a page loaded over https can't use a plain `ws://` relay (except on localhost).
 
 The relay limits rooms to one host and five guests, caps messages at 64 KB, limits message rates (hosts get a bigger budget because they relay to everyone), limits connections and rooms per address, and closes a room as soon as its host leaves or after 30 minutes without traffic.
 
@@ -111,7 +113,7 @@ The game is a static site with relative paths only, so any static host works. To
 1. Push the repository to GitHub.
 2. In **Settings → Pages**, set **Source** to **GitHub Actions**.
 
-The included workflow (`.github/workflows/pages.yml`) runs the tests and publishes `index.html`, `styles.css`, `src/` and `vendor/` on every push to `main`. Online play works from Pages through PeerJS. The relay needs a Node host, because Pages can't run servers.
+The included workflow (`.github/workflows/pages.yml`) runs the tests and publishes `index.html`, `styles.css`, `relay.json`, `src/` and `vendor/` on every push to `main`. Online play works from Pages through PeerJS. Pages can't run the relay, so if you need it, host it on a Node host or behind a tunnel (see [Play online](#play-online)) and paste its address when you create a room.
 
 ## How it's organized
 
@@ -146,6 +148,7 @@ The included workflow (`.github/workflows/pages.yml`) runs the tests and publish
 | `src/storage.js` | Settings and preferences in `localStorage` |
 | `src/main.js` | Wires everything together and runs the game loop and the title-screen demo battle |
 | `server/server.js` | `npm start`: static file server plus the relay |
+| `relay.json` | Tells the game there's no relay here when it's on a static host; the relay server answers the same address with `true` |
 | `server/relay.js` | The WebSocket relay (uses the `ws` package) |
 | `vendor/peerjs/` | PeerJS 1.5.5 (MIT), loaded only for peer-to-peer play |
 
@@ -166,7 +169,7 @@ npm run test:e2e  # browser tests with Playwright (installs Chromium if needed)
 
 `npm test` covers the PRNG, terrain carving and settling, collisions and sub-stepping, walls, blast falloff, falling and parachutes, every weapon's key behavior, shields, the economy and shop rules, the AI (including hitting a target within a few shots with no wind, and staying within its time budget), snapshot and hash round-trips, and rejection of bad protocol messages. It also runs full AI-driven online games over the loopback transport, with a host and one or two guests, and checks that every guest's state hash matches the host's after every shot. The relay is tested with real WebSocket clients, including a complete game.
 
-`npm run test:e2e` plays in real Chromium: the title demo and help screen, a local game against the AI with zero console errors, the phone layout's touch controls, and online games between two browser contexts over the relay and over PeerJS. The PeerJS test is skipped if the public PeerJS server can't be reached. Screenshots land in `test-results/e2e/`.
+`npm run test:e2e` plays in real Chromium: the title demo and help screen, a local game against the AI with zero console errors, the phone layout's touch controls, and online games between two browser contexts. The online tests cover a page served by the relay, and the game on a GitHub Pages stand-in (static files under a subpath). From that stand-in they play once through a relay hosted elsewhere and once over PeerJS. The PeerJS test is skipped if the public PeerJS server can't be reached. Screenshots land in `test-results/e2e/`.
 
 The page exposes a small debug hook for tests and tinkering: `window.__scorched.phase`, `.hash`, `.turnId`, `.round`, `.seq` and `.session`. Press F3 in a game to show frame rate and simulation info.
 

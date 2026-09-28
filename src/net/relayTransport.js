@@ -11,6 +11,41 @@ export function sameOriginRelayUrl(loc = globalThis.location) {
   return `${loc.protocol === 'https:' ? 'wss:' : 'ws:'}//${loc.host}/ws`;
 }
 
+/**
+ * Resolves with this site's relay address when the page is served by the relay server
+ * (`npm start`, for example behind cloudflared), or '' when it isn't (GitHub Pages and other
+ * static hosts), so the relay option never points at a server that doesn't exist. Static hosts
+ * serve the checked-in relay.json ({"relay": false}); the relay server answers it live.
+ */
+export async function detectSameOriginRelay(loc = globalThis.location, fetchFn = globalThis.fetch) {
+  if (!loc || !/^https?:$/.test(loc.protocol) || typeof fetchFn !== 'function') return '';
+  try {
+    const signal = typeof AbortSignal !== 'undefined' && AbortSignal.timeout ? AbortSignal.timeout(4000) : undefined;
+    const res = await fetchFn(new URL('relay.json', loc.href).href, { cache: 'no-store', signal });
+    if (!res.ok) return '';
+    const info = await res.json();
+    if (!info || info.relay !== true) return '';
+    const ws = new URL('ws', loc.href);
+    ws.protocol = ws.protocol === 'https:' ? 'wss:' : 'ws:';
+    ws.search = '';
+    ws.hash = '';
+    return ws.href;
+  } catch {
+    return '';
+  }
+}
+
+const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
+
+/** Why a relay address can't work from this page, or '' if it can. */
+export function relayUrlProblem(url, loc = globalThis.location) {
+  if (!url) return 'Enter the address of a relay server. This site does not run one itself: start one with "npm start" (for example behind cloudflared) and paste its https address.';
+  if (loc?.protocol === 'https:' && url.startsWith('ws://') && !LOCAL_HOSTS.has(new URL(url).hostname)) {
+    return 'This page was loaded over https, so browsers only allow secure relay addresses. Use the https:// (or wss://) address of the relay.';
+  }
+  return '';
+}
+
 /** Accepts http(s) or ws(s) URLs and returns a ws(s) URL ending in /ws, or '' if unusable. */
 export function normalizeRelayUrl(text) {
   let value = String(text ?? '').trim();

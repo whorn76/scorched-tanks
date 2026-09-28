@@ -24,7 +24,11 @@ const MIME_TYPES = {
 // Only the game itself is served; tooling, tests and the server code stay private.
 const PUBLIC = [/^\/index\.html$/, /^\/styles\.css$/, /^\/src\//, /^\/vendor\//, /^\/favicon\.ico$/];
 
-export function createStaticHandler() {
+/**
+ * Serves the public game files. `hasRelay()` says whether the relay is running here; the game
+ * asks /relay.json so it only offers this site as a relay when there really is one.
+ */
+export function createStaticHandler({ hasRelay = () => false } = {}) {
   return async (req, res) => {
     let pathname;
     try {
@@ -39,6 +43,12 @@ export function createStaticHandler() {
     }
     if (pathname === '/healthz') {
       res.writeHead(200, { 'Content-Type': 'text/plain' }).end('ok');
+      return;
+    }
+    if (pathname === '/relay.json') {
+      // Always answered (never a 404), so browsers don't log an error when there's no relay.
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+      res.end(req.method === 'HEAD' ? undefined : JSON.stringify({ relay: hasRelay() }));
       return;
     }
     if (pathname.endsWith('/')) pathname += 'index.html';
@@ -68,8 +78,8 @@ export function createStaticHandler() {
 }
 
 export async function startServer({ port = Number(process.env.PORT) || 8080, host = process.env.HOST || '0.0.0.0', quiet = false } = {}) {
-  const server = createServer(createStaticHandler());
   let relay = null;
+  const server = createServer(createStaticHandler({ hasRelay: () => relay !== null }));
   try {
     const { attachRelay } = await import('./relay.js');
     relay = await attachRelay(server);

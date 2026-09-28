@@ -1,22 +1,35 @@
-// Online play between two browser contexts. Used by relay.e2e.mjs and peer.e2e.mjs.
+// Online play between two browser contexts. Used by relay.e2e.mjs, peer.e2e.mjs and
+// hosted.e2e.mjs.
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { BASE_URL, SHOTS, aimAndFire, openPage } from './helpers.mjs';
 
 const settings = { startCash: 0, rounds: 2, wind: 'medium', turnTimer: 0 };
 
-export async function playOnline(browser, { transport, label, turns = 4 }) {
-  const host = await openPage(browser, { name: `${label}-host`, storage: { settings, online: { name: 'Alice', transport } } });
+/**
+ * Hosts a room on `baseUrl`, has a second browser join through the real invite link, plays
+ * `turns` shots and checks both sides agree. `relayUrl` is typed into the relay field when the
+ * relay runs somewhere other than the page's own server. Returns what the relay field held
+ * before anything was typed.
+ */
+export async function playOnline(browser, { transport, label, turns = 4, baseUrl = BASE_URL, relayUrl = null }) {
+  const host = await openPage(browser, { name: `${label}-host`, url: baseUrl, clipboard: true, storage: { settings, online: { name: 'Alice', transport } } });
   await host.click('#btn-host');
   await host.fill('#host-name', 'Alice');
   await host.check(`input[name=transport][value=${transport}]`);
+  await host.waitForFunction(() => window.__scorched.app.relayChecked);
+  const relayDefault = await host.inputValue('#relay-url');
+  if (relayUrl) await host.fill('#relay-url', relayUrl);
   await host.click('#btn-create-room');
   await host.waitForFunction(() => window.__scorched.phase === 'online:lobby', null, { timeout: 30000 });
   const code = await host.evaluate(() => window.__scorched.code);
   assert.match(code, /^[ACEFGHKMNPRTWXY34679]{5}$/);
 
-  // The guest opens the invite link, which goes straight to the join screen with the code filled in.
-  const invite = `${BASE_URL}#join=${code}${transport === 'relay' ? `&relay=${encodeURIComponent(`${BASE_URL.replace(/^http/, 'ws')}ws`)}` : ''}`;
+  // The guest opens the invite link, which goes straight to the join screen with the code (and
+  // the relay's address, if any) filled in.
+  await host.click('#btn-copy-invite');
+  const invite = await host.evaluate(() => navigator.clipboard.readText());
+  assert.ok(invite.startsWith(baseUrl), `the invite link ${invite} points at this site`);
   const guest = await openPage(browser, { name: `${label}-guest`, url: invite, storage: { online: { name: 'Bob' } } });
   await guest.waitForSelector('#join-screen');
   assert.equal(await guest.inputValue('#join-code'), code);
@@ -79,4 +92,5 @@ export async function playOnline(browser, { transport, label, turns = 4 }) {
   await guest.screenshot({ path: join(SHOTS, `${label}-host-left.png`) });
   await host.context().close();
   await guest.context().close();
+  return { relayDefault };
 }

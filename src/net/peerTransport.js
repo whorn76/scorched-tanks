@@ -8,14 +8,31 @@ const PEERJS_SRC = new URL('../../vendor/peerjs/peerjs.min.js', import.meta.url)
 
 export const STUN_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }];
 
-/** STUN plus an optional user-supplied TURN server for networks that block direct connections. */
-export function iceServers({ turnUrl = '', turnUser = '', turnPass = '' } = {}) {
-  const servers = [...STUN_SERVERS];
-  const urls = turnUrl
+// PeerJS's own default config also lists free TURN servers (eu-0/us-0.turn.peerjs.com), but
+// those hosts no longer exist, so there is no free relay to fall back on: players on strict
+// networks need the WebSocket relay or their own TURN server (the Advanced fields).
+
+/** TURN URLs from the Advanced field (comma or space separated), keeping only turn: and turns:. */
+export function parseTurnUrls(text = '') {
+  return String(text)
     .split(/[\s,]+/)
     .map((u) => u.trim())
     .filter((u) => /^turns?:/i.test(u));
-  if (urls.length) servers.push({ urls, username: turnUser || undefined, credential: turnPass || undefined });
+}
+
+/** Why the Advanced TURN settings can't be used, or '' if they're fine (or empty). */
+export function turnProblem({ turnUrl = '', turnUser = '', turnPass = '' } = {}) {
+  if (!String(turnUrl).trim()) return '';
+  if (!parseTurnUrls(turnUrl).length) return 'TURN addresses start with turn: or turns:.';
+  if (!turnUser || !turnPass) return 'A TURN server needs a username and a password.';
+  return '';
+}
+
+/** Google STUN, plus the player's own TURN server if they set one. */
+export function iceServers({ turnUrl = '', turnUser = '', turnPass = '' } = {}) {
+  const servers = [...STUN_SERVERS];
+  const urls = parseTurnUrls(turnUrl);
+  if (urls.length && turnUser && turnPass) servers.push({ urls, username: turnUser, credential: turnPass });
   return servers;
 }
 
@@ -168,7 +185,7 @@ export async function joinPeer(code, { ice = {}, timeoutMs = 20000, onStatus = (
   onStatus('Connecting to the host…');
   const conn = peer.connect(PEER_PREFIX + code, { reliable: true, serialization: 'json' });
   const result = await new Promise((resolve) => {
-    const timer = setTimeout(() => resolve({ type: 'timeout', message: 'Could not connect to the host. A firewall may be blocking direct connections: try a TURN server or the relay.' }), timeoutMs);
+    const timer = setTimeout(() => resolve({ type: 'timeout', message: 'Could not connect to the host. Both networks may be blocking connections: try your own TURN server (Advanced) or the relay server.' }), timeoutMs);
     conn.on('open', () => {
       clearTimeout(timer);
       resolve('open');

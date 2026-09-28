@@ -1,6 +1,8 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { startServer } from '../server/server.js';
+import { createServer } from 'node:http';
+import { readFileSync } from 'node:fs';
+import { createStaticHandler, startServer } from '../server/server.js';
 import { hostRelay, joinRelay } from '../src/net/relayTransport.js';
 import { HostSession } from '../src/session/host.js';
 import { GuestSession } from '../src/session/guest.js';
@@ -51,6 +53,20 @@ test('the server serves the game but not the project internals', async () => {
   for (const hidden of ['/package.json', '/server/relay.js', '/test/game.test.js', '/../package.json', '/node_modules/ws/package.json']) {
     assert.equal((await fetch(`${base}${hidden}`)).status, 404, hidden);
   }
+});
+
+test('relay.json tells the game whether the server it came from runs the relay', async () => {
+  const live = await fetch(`${base}/relay.json`);
+  assert.equal(live.status, 200);
+  assert.deepEqual(await live.json(), { relay: true });
+  // Without the relay (and on static hosts, via the checked-in file) the answer is no, not a 404.
+  const plain = createServer(createStaticHandler());
+  await new Promise((resolve) => plain.listen(0, '127.0.0.1', resolve));
+  const none = await fetch(`http://127.0.0.1:${plain.address().port}/relay.json`);
+  assert.equal(none.status, 200);
+  assert.deepEqual(await none.json(), { relay: false });
+  await new Promise((resolve) => plain.close(resolve));
+  assert.deepEqual(JSON.parse(readFileSync(new URL('../relay.json', import.meta.url), 'utf8')), { relay: false });
 });
 
 test('encoded dot-dot paths cannot escape the allow-list', async () => {

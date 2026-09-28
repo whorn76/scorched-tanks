@@ -1,5 +1,5 @@
 import { test, before, after } from 'node:test';
-import { launch } from './helpers.mjs';
+import { STATIC_URL, launch } from './helpers.mjs';
 import { playOnline } from './online.mjs';
 
 let browser;
@@ -18,10 +18,10 @@ after(async () => {
   await browser?.close();
 });
 
-test('two browsers play online over PeerJS (WebRTC)', async (t) => {
+test('two browsers play online over PeerJS (WebRTC) from a static host like GitHub Pages', async (t) => {
   if (!reachable) {
     t.skip('the public PeerJS server (0.peerjs.com) is not reachable');
     return;
   }
-  await playOnline(browser, { transport: 'peer', label: 'peer', turns: 4 });
+  await playOnline(browser, { transport: 'peer', label: 'peer', turns: 4, baseUrl: STATIC_URL });
 });
