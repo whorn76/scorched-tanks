@@ -296,7 +296,8 @@ export class HostSession extends AuthoritySession {
 
   onCommit(cmd) {
     this.broadcast({ t: 'cmd', seq: this.seq, cmd: wireCommand(cmd) });
-    if (this.game.isIdle()) this.sendSync();
+    // Shots and drives are checked when they settle; a new round is checked right away.
+    if (cmd.type === 'newRound' && this.game.isIdle()) this.sendSync();
   }
 
   onSettled() {

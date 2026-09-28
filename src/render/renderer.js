@@ -670,7 +670,32 @@ export class Renderer {
         ctx.closePath();
         ctx.stroke();
         ctx.fill();
+        // An AI that hasn't started swinging its barrel yet is thinking.
+        if (s.phase === Phase.AIM && tank.ai && !session.previews.has(tank.id)) this.drawThinking(ctx, x + 18, top - 30, view.time);
       }
+    }
+  }
+
+  drawThinking(ctx, x, y, time) {
+    ctx.fillStyle = 'rgba(255,255,255,0.92)';
+    ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.roundRect(x - 2, y - 10, 34, 18, 9);
+    ctx.fill();
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(x - 3, y + 11, 3, 0, TAU);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(x - 8, y + 17, 1.8, 0, TAU);
+    ctx.fill();
+    for (let i = 0; i < 3; i++) {
+      const up = Math.max(0, Math.sin(time * 7 - i * 0.9)) * 2.5;
+      ctx.fillStyle = '#39414f';
+      ctx.beginPath();
+      ctx.arc(x + 7 + i * 8, y - 1 - up, 2.3, 0, TAU);
+      ctx.fill();
     }
   }
 

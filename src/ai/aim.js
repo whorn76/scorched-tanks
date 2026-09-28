@@ -1,7 +1,7 @@
 // AI aiming: search angle and power by flying trial shells through the real physics (no side
-// effects), then add personality-dependent error. The search is a generator that yields after
-// every few trial shots so the caller can spread it across frames.
-import { MAX_POWER, TANK, WIDTH } from '../core/constants.js';
+// effects), then add personality-dependent error. The search is a generator that yields every
+// few trial shots so the caller can spread it across frames.
+import { MAX_POWER, TANK, WIDTH, WIND_ACCEL } from '../core/constants.js';
 import { maxPower } from '../core/game.js';
 import { HIT_LOST, HIT_SHIELD, HIT_TANK, barrelTip, launchVector, traceShot } from '../core/physics.js';
 
@@ -36,13 +36,15 @@ export function candidateAngles(shooter, target) {
 }
 
 /**
- * Generator that searches for the best (angle, power) to hit `target`. Yields between trial
- * batches; returns { angle, power, score }.
+ * Generator that searches for the best (angle, power) to hit `target`. Yields between small
+ * batches of trial shots; returns { angle, power, score, tries }.
  */
 export function* searchAim(env, shooter, target, { blast = 20, powerCap = maxPower(shooter), angles = null } = {}) {
   const cap = Math.max(60, Math.min(MAX_POWER, powerCap));
   let best = { angle: shooter.x < WIDTH / 2 ? 60 : 120, power: Math.min(500, cap), score: Infinity };
+  let tries = 0;
   const consider = (angle, power) => {
+    tries++;
     const result = trial(env, shooter, angle, power);
     const score = scoreImpact(result, shooter, target, blast);
     if (score < best.score) best = { angle, power, score, result };
@@ -60,6 +62,7 @@ export function* searchAim(env, shooter, target, { blast = 20, powerCap = maxPow
         localBest = score;
         localPower = power;
       }
+      if (i % 8 === 0) yield best.score;
     }
     // Refine power around the best coarse sample.
     let span = cap / steps;
@@ -85,9 +88,27 @@ export function* searchAim(env, shooter, target, { blast = 20, powerCap = maxPow
   for (const da of [-2, -1, -0.5, 0.5, 1, 2]) {
     const angle = Math.min(180, Math.max(0, best.angle + da));
     for (const dp of [-6, 0, 6]) consider(angle, Math.min(cap, Math.max(0, best.power + dp)));
+    yield best.score;
   }
-  yield best.score;
+  best.tries = tries;
   return best;
+}
+
+/**
+ * The wind (as px/s² of push) that would explain where a shot actually landed. The Spotter uses
+ * this to correct its aim after a miss instead of reading the wind gauge.
+ */
+export function fitWind(env, tank, angle, power, impactX) {
+  let lo = -WIND_ACCEL * 22;
+  let hi = WIND_ACCEL * 22;
+  for (let i = 0; i < 16; i++) {
+    const mid = (lo + hi) / 2;
+    const r = trial({ ...env, windAccel: mid }, tank, angle, power);
+    const x = r.code === HIT_LOST ? (r.x < WIDTH / 2 ? -1e6 : 1e6) : r.x;
+    if (x < impactX) lo = mid;
+    else hi = mid;
+  }
+  return (lo + hi) / 2;
 }
 
 /** True when dirt sits right in front of the barrel (the tank is buried). */
@@ -97,4 +118,11 @@ export function isBuried(terrain, tank) {
     if (terrain.isSolid(tank.x + dx, tank.y + dy)) solid++;
   }
   return solid >= 3;
+}
+
+/** True when the ground on both sides of a tank is higher: rollers will run down to it. */
+export function inValley(terrain, tank) {
+  const left = terrain.surfaceY(Math.max(0, tank.x - 45));
+  const right = terrain.surfaceY(Math.min(WIDTH - 1, tank.x + 45));
+  return left < tank.y - 18 && right < tank.y - 18;
 }

@@ -90,6 +90,7 @@ export function createTank(player, index, money) {
     dying: 0,
     killer: -1,
     lastHitBy: -1,
+    lastDamagedBy: -1,
     burn: 0,
     moving: 0,
     moveDir: 0,
@@ -357,6 +358,7 @@ export class Game {
       dying: 0,
       killer: -1,
       lastHitBy: -1,
+      lastDamagedBy: -1,
       falling: false,
       vy: 0,
       fallFrom: y,
@@ -938,6 +940,7 @@ export class Game {
     }
     const dealt = Math.min(amount, tank.health);
     tank.health -= dealt;
+    if (attacker >= 0 && attacker !== tank.id) tank.lastDamagedBy = attacker;
     this.emit({ type: 'damage', tank: tank.id, amount: dealt, attacker });
     this.credit(attacker, tank, dealt);
     if (tank.health <= 0) this.destroy(tank, attacker);

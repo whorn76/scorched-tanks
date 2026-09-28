@@ -245,7 +245,7 @@ export class AuthoritySession extends Session {
         if (this.flowTimer >= ROUND_SUMMARY_TICKS) this.commit(this.game.isLastRound() ? { type: 'endGame' } : { type: 'openShop' });
         break;
       case Phase.SHOP:
-        if (this.flowTimer >= 2 && this.waitingShoppers().length === 0) this.commit(this.planNextRound());
+        if (this.flowTimer >= 2 && this.waitingShoppers().length === 0 && (this.brain?.shoppingDone() ?? true)) this.commit(this.planNextRound());
         break;
     }
   }
