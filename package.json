@@ -1,0 +1,21 @@
+{
+  "name": "scorched-tanks",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A turn-based artillery tank game for the browser with hot-seat, AI and online play. A tribute to Scorched Earth.",
+  "type": "module",
+  "scripts": {
+    "start": "node server/server.js",
+    "test": "node --test \"test/*.test.js\"",
+    "test:e2e": "node e2e/run.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "ws": "^8.22.0"
+  },
+  "devDependencies": {
+    "playwright": "^1.63.0"
+  }
+}
