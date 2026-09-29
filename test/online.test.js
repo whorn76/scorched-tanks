@@ -168,10 +168,18 @@ test('the host rejects version mismatches, full rooms and games in progress', as
   const conn = room.hub.connectNow('ROOM1');
   const replies = [];
   conn.onMessage((m) => replies.push(m));
-  conn.send({ t: 'hello', v: PROTOCOL_VERSION + 1, name: 'Old' });
+  conn.send({ t: 'hello', v: PROTOCOL_VERSION + 1, name: 'Newer' });
   room.hub.flush();
   assert.equal(replies[0].t, 'reject');
   assert.match(replies[0].reason, /version/i);
+  assert.equal(replies[0].hostVersion, PROTOCOL_VERSION, 'the host says which version it runs');
+  const outdated = (events) => events.some((e) => e.type === 'net' && /newer version/.test(e.text));
+  assert.ok(outdated(room.host.events), 'a host with the older copy is told to reload');
+  const seen = room.host.events.length;
+  const older = room.hub.connectNow('ROOM1');
+  older.send({ t: 'hello', v: PROTOCOL_VERSION - 1, name: 'Older' });
+  room.hub.flush();
+  assert.ok(!outdated(room.host.events.slice(seen)), 'but not when the guest is the one out of date');
 
   // Game already started.
   room.guests[2].close();
@@ -181,6 +189,37 @@ test('the host rejects version mismatches, full rooms and games in progress', as
   room.hub.flush();
   assert.equal(tooLate.status, 'ended');
   assert.match(tooLate.endReason, /already started/i);
+});
+
+test('a guest turned away for its version learns which side needs to reload', () => {
+  const joinWith = (reply) => {
+    const hub = new LoopbackHub({ manual: true });
+    hub.host('OTHER').onConnection((conn) => conn.onMessage(() => conn.send(reply)));
+    const guest = new GuestSession({ conn: hub.connectNow('OTHER'), name: 'Guest' });
+    hub.flush();
+    return guest;
+  };
+  // Hosts from before protocol v2 only mention their version in the text, and always said
+  // "reload", even to the guest with the newer copy.
+  const oldHost = joinWith({ t: 'reject', reason: 'Version mismatch: the host runs protocol v1 and you have v2. Reload the page to update.' });
+  assert.equal(oldHost.status, 'ended');
+  assert.equal(oldHost.versionMismatch, true);
+  assert.equal(oldHost.updateNeeded, false, 'reloading would not help this guest');
+  assert.match(oldHost.endReason, /host is running an older version/);
+  const newHost = joinWith({ t: 'reject', reason: 'Version mismatch.', hostVersion: PROTOCOL_VERSION + 1 });
+  assert.equal(newHost.updateNeeded, true);
+  assert.match(newHost.endReason, /out of date/);
+  const full = joinWith({ t: 'reject', reason: 'That room is full.' });
+  assert.equal(full.versionMismatch, undefined);
+  assert.equal(full.endReason, 'That room is full.');
+});
+
+test('the host hears about guests who could not get through', () => {
+  const hub = new LoopbackHub({ manual: true });
+  const transport = hub.host('ROOM9');
+  const host = new HostSession({ transport, name: 'Hosty', seed: 1, aiFast: true });
+  transport.notice('Someone tried to join, but could not get through.');
+  assert.ok(host.events.some((e) => e.type === 'net' && e.level === 'warn' && /tried to join/.test(e.text)));
 });
 
 test('the host ignores shots from players whose turn it is not and from bad messages', async () => {

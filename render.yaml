@@ -1,0 +1,12 @@
+# An always-on relay for online play on Render's free plan (see "Play online" in the README).
+# It serves the game too: open the service's address to play, and online games there go
+# through its relay, which works on any network.
+services:
+  - type: web
+    name: scorched-tanks
+    runtime: node
+    plan: free
+    buildCommand: npm ci --omit=dev
+    startCommand: npm start
+    healthCheckPath: /healthz
+    autoDeployTrigger: commit

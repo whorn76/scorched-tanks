@@ -31,7 +31,7 @@ if (!server.relay) {
   await server.close();
   process.exit(1);
 }
-const staticHost = await startStaticHost(root);
+const staticHost = await startStaticHost();
 const baseUrl = `http://127.0.0.1:${server.port}/`;
 mkdirSync(join(root, 'test-results', 'e2e'), { recursive: true });
 console.log(`Game server (with relay) at ${baseUrl}`);

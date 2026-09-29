@@ -89,22 +89,28 @@ AIs also shop, raise shields, use batteries, drive closer when they can't reach,
 2. Friends choose **Join Online** and type the code, or just open the invite link (`…#join=CODE`), which goes straight to the join screen.
 3. The host picks the settings, can add AI tanks, and starts the game. Up to four people can play (the host plus three guests), with up to six tanks in total. There's a chat in the lobby and during the game (press T).
 
-**Peer-to-peer (default).** Players connect directly over WebRTC data channels, using the free public [PeerJS](https://peerjs.com) server only to find each other. You don't need to run any server; hosting the page anywhere, including GitHub Pages, is enough. This works on most home networks.
+**Peer-to-peer (default).** Players connect directly over WebRTC data channels, using the free public [PeerJS](https://peerjs.com) server only to find each other. You don't need to run any server; hosting the page anywhere, including GitHub Pages, is enough.
 
-**When direct connections fail.** If both players are on strict networks (some mobile carriers, offices and schools), WebRTC can't connect directly, and joining times out after about 20 seconds. There's no free public TURN server to fall back on (the ones PeerJS used to list are gone), so use the relay server below, or enter your own TURN server under **Advanced: TURN server** on the host and join screens (for example from a hosted TURN provider). Both players should enter the same TURN server.
+**When direct connections fail.** Direct connections often can't get through between two different internet connections, for example when one player is on mobile data or a phone hotspot, behind a strict router, or at an office or school. Joining then fails with "Couldn't connect directly to the host", and the host sees a note that someone couldn't get through. There's no free public TURN server to fall back on (the ones PeerJS used to list are gone), so play through a relay server instead, as described next.
 
-**Relay server (fallback).** Every message can go through a small relay instead, which works on nearly any network because it's an ordinary secure WebSocket. The relay is part of `npm start`: it serves the game and relays messages on `/ws`. To play over the internet, expose it with a tunnel:
+**Play across networks with `npm run online`.** The relay is a small server that passes every message along over an ordinary secure WebSocket, so it works on any network. The easiest way to run one is on the host's PC:
 
 ```sh
-npm start
-cloudflared tunnel --url http://localhost:8080
+npm install
+npm run online
 ```
 
-Share the `https://….trycloudflare.com` address it prints. Everyone opens that address, and the host picks **Relay server** before creating the room; the relay address is filled in automatically because the page came from the relay. The invite link includes the relay address, so guests don't need to type it. You can also deploy the repository to a Node host such as Render (build command `npm install`, start command `npm start`) and use its URL the same way.
+This starts the game server with its relay and opens a free Cloudflare quick tunnel to it (no account needed; the first run downloads Cloudflare's `cloudflared` into `.cache/`). It prints a public `https://….trycloudflare.com` link and opens it in your browser. Choose **Host Online** there (the relay is picked automatically) and send your friends the invite link. The link is new every time, and games go through your PC, so keep the window open while you play; press Ctrl+C to stop. To do the same by hand, run `npm start` and `cloudflared tunnel --url http://localhost:8080`.
 
-If the game itself is on a static host such as GitHub Pages, run the relay somewhere else as above. Then the host pastes the relay's `https://` address into the **Relay server address** field, and the invite link passes it to everyone else. Use the https address: a page loaded over https can't use a plain `ws://` relay (except on localhost).
+**An always-on relay on Render.** To play without running anything on your PC, deploy the repository to [Render](https://render.com)'s free plan: [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/whorn76/scorched-tanks). The included `render.yaml` sets it up (build `npm ci --omit=dev`, start `npm start`). Then open the service's `https://….onrender.com` address to play; online games there use its relay automatically. The free plan goes to sleep when nobody has used it for 15 minutes, so the first visit after that takes about a minute to wake it up.
+
+**Using a relay from GitHub Pages.** The copy of the game on a static host such as GitHub Pages can use a relay that runs somewhere else too. The host chooses **Relay server** and pastes the relay's `https://` address (from `npm run online` or Render), and the invite link passes it to everyone else. Use the https address: a page loaded over https can't use a plain `ws://` relay (except on localhost).
+
+**Your own TURN server.** Instead of a relay, you can enter a TURN server (for example from a hosted TURN provider) under **Advanced: TURN server** on the host and join screens. Both players should enter the same one.
 
 The relay limits rooms to one host and five guests, caps messages at 64 KB, limits message rates (hosts get a bigger budget because they relay to everyone), limits connections and rooms per address, and closes a room as soon as its host leaves or after 30 minutes without traffic.
+
+**Versions.** Everyone in a game needs the same version. If the versions differ, the player who's turned away is told whose copy is out of date, and a guest with the older copy gets a **Reload** button that brings them back to the same invite. The GitHub Pages copy also checks for a newer version before you host or join, and offers to reload first (see [Deploy to GitHub Pages](#deploy-to-github-pages)).
 
 **Who's in charge.** The host runs the real game. Guests send their moves; the host checks them (right player, right turn, ammo in stock, sane numbers, not too many messages) and broadcasts them, and every client simulates each shot itself, so explosions look smooth everywhere. After every shot the host sends a fingerprint of the game state. A guest whose fingerprint differs downloads a compressed snapshot and carries on. If a guest drops out, an AI takes over their tank; if the host leaves, the guests are told and return to the menu.
 
@@ -115,7 +121,9 @@ The game is a static site with relative paths only, so any static host works. To
 1. Push the repository to GitHub.
 2. In **Settings → Pages**, set **Source** to **GitHub Actions**.
 
-The included workflow (`.github/workflows/pages.yml`) runs the tests and publishes `index.html`, `styles.css`, `relay.json`, `src/` and `vendor/` on every push to `main`. Online play works from Pages through PeerJS. Pages can't run the relay, so if you need it, host it on a Node host or behind a tunnel (see [Play online](#play-online)) and paste its address when you create a room.
+The included workflow (`.github/workflows/pages.yml`) runs the tests on every push to `main`, then publishes the site that `scripts/package-pages.mjs` assembles: `index.html`, `relay.json` and `version.json` at the top, and the game itself (`src/`, `vendor/`, `styles.css`) under `v/<commit>/`. GitHub Pages lets browsers reuse files for up to 10 minutes without checking for new ones, so without the versioned folder a reload shortly after an update could still run old files, or a mix of old and new ones. With it, every deploy has new addresses: a page always loads one complete version, `version.json` lets a running copy notice that a newer one is out, and the title screen shows which version you have. Right after a deploy, a reload (Ctrl+F5 to be sure) picks up the new version.
+
+Online play works from Pages through PeerJS. Pages can't run the relay, so for players on different networks, run one with `npm run online` or on Render (see [Play online](#play-online)) and paste its address when you create a room.
 
 ## How it's organized
 
@@ -149,9 +157,13 @@ The included workflow (`.github/workflows/pages.yml`) runs the tests and publish
 | `src/input.js` | Keyboard input with held-key acceleration |
 | `src/storage.js` | Settings and preferences in `localStorage` |
 | `src/main.js` | Wires everything together and runs the game loop and the title-screen demo battle |
+| `src/version.js` | Which published version is running, and whether a newer one is out |
 | `server/server.js` | `npm start`: static file server plus the relay |
 | `relay.json` | Tells the game there's no relay here when it's on a static host; the relay server answers the same address with `true` |
 | `server/relay.js` | The WebSocket relay (uses the `ws` package) |
+| `scripts/online.mjs` | `npm run online`: the relay server plus a Cloudflare quick tunnel, for playing across networks |
+| `scripts/package-pages.mjs` | Assembles the GitHub Pages site, with the game under `v/<commit>/` |
+| `render.yaml` | Render blueprint for an always-on relay |
 | `vendor/peerjs/` | PeerJS 1.5.5 (MIT), loaded only for peer-to-peer play |
 
 Some design choices worth knowing:
@@ -169,9 +181,9 @@ npm test          # unit and integration tests (Node's built-in runner)
 npm run test:e2e  # browser tests with Playwright (installs Chromium if needed)
 ```
 
-`npm test` covers the PRNG, terrain carving and settling, collisions and sub-stepping, walls, blast falloff, falling and parachutes, every weapon's key behavior, shields, the economy and shop rules, the AI (including hitting a target within a few shots with no wind, missing often enough that even the Cyborg isn't a perfect shot, and staying within its time budget), snapshot and hash round-trips, and rejection of bad protocol messages. It also runs full AI-driven online games over the loopback transport, with a host and one or two guests, and checks that every guest's state hash matches the host's after every shot. The relay is tested with real WebSocket clients, including a complete game.
+`npm test` covers the PRNG, terrain carving and settling, collisions and sub-stepping, walls, blast falloff, falling and parachutes, every weapon's key behavior, shields, the economy and shop rules, the AI (including hitting a target within a few shots with no wind, missing often enough that even the Cyborg isn't a perfect shot, and staying within its time budget), snapshot and hash round-trips, rejection of bad protocol messages, version-mismatch handling, and the packaged Pages site. It also runs full AI-driven online games over the loopback transport, with a host and one or two guests, and checks that every guest's state hash matches the host's after every shot. The relay is tested with real WebSocket clients, including a complete game.
 
-`npm run test:e2e` plays in real Chromium: the title demo and help screen, a local game against the AI with zero console errors, the phone layout's touch controls, and online games between two browser contexts. The online tests cover a page served by the relay, and the game on a GitHub Pages stand-in (static files under a subpath). From that stand-in they play once through a relay hosted elsewhere and once over PeerJS. The PeerJS test is skipped if the public PeerJS server can't be reached. Screenshots land in `test-results/e2e/`.
+`npm run test:e2e` plays in real Chromium: the title demo and help screen, a local game against the AI with zero console errors, the phone layout's touch controls, and online games between two browser contexts. The online tests cover a page served by the relay, and the game on a GitHub Pages stand-in (the site packaged exactly as the Pages workflow does it, served under a subpath). From that stand-in they play once through a relay hosted elsewhere and once over PeerJS, and check that an out-of-date copy offers to reload before joining. The PeerJS test is skipped if the public PeerJS server can't be reached. Screenshots land in `test-results/e2e/`.
 
 The page exposes a small debug hook for tests and tinkering: `window.__scorched.phase`, `.hash`, `.turnId`, `.round`, `.seq` and `.session`. Press F3 in a game to show frame rate and simulation info.
 

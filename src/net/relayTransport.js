@@ -39,7 +39,7 @@ const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 
 /** Why a relay address can't work from this page, or '' if it can. */
 export function relayUrlProblem(url, loc = globalThis.location) {
-  if (!url) return 'Enter the address of a relay server. This site does not run one itself: start one with "npm start" (for example behind cloudflared) and paste its https address.';
+  if (!url) return 'Enter the address of a relay server. This site does not run one itself: start one on your PC with "npm run online" and paste the address it prints.';
   if (loc?.protocol === 'https:' && url.startsWith('ws://') && !LOCAL_HOSTS.has(new URL(url).hostname)) {
     return 'This page was loaded over https, so browsers only allow secure relay addresses. Use the https:// (or wss://) address of the relay.';
   }

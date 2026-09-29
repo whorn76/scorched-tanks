@@ -38,6 +38,14 @@ export function iceServers({ turnUrl = '', turnUser = '', turnPass = '' } = {}) 
 
 let loading = null;
 
+// When the two browsers can't reach each other (strict NATs, firewalls, mobile data), WebRTC
+// gives up with PeerJS's "negotiation-failed" error, or never connects at all.
+const DIRECT_FAILURES = new Set(['negotiation-failed', 'connection-closed', 'direct-timeout']);
+export const DIRECT_BLOCKED_GUEST =
+  "Couldn't connect directly to the host: your internet connections don't allow a direct link. Play through a relay server instead (the host can start one with \"npm run online\" and send you its link), or add a TURN server under Advanced.";
+export const DIRECT_BLOCKED_HOST =
+  "Someone tried to join, but your internet connections don't allow a direct link. To play across networks, use a relay server: run \"npm run online\" and share its link.";
+
 /** Loads vendor/peerjs/peerjs.min.js once and resolves with the global Peer class. */
 export function loadPeerJs() {
   if (globalThis.Peer) return Promise.resolve(globalThis.Peer);
@@ -57,7 +65,8 @@ export function loadPeerJs() {
   return loading;
 }
 
-function peerError(err) {
+export function peerError(err) {
+  if (DIRECT_FAILURES.has(err?.type)) return DIRECT_BLOCKED_GUEST;
   switch (err?.type) {
     case 'peer-unavailable':
       return 'No room with that code (or the host has left).';
@@ -151,10 +160,28 @@ export async function hostPeer({ ice = {}, timeoutMs = 15000, onStatus = () => {
       throw new Error(peerError(result));
     }
     const transport = new HostTransportBase('peer', code);
+    let lastNotice = -Infinity;
     peer.on('connection', (conn) => {
-      const accept = () => transport.accept(new PeerConnection(conn));
+      let opened = false;
+      // A guest who can't get through never shows up in the lobby, so tell the host why. Guests
+      // give up after 20 seconds, so a connection that still isn't open after 25 never will.
+      const failed = () => {
+        clearTimeout(giveUp);
+        if (opened || transport.closed || Date.now() - lastNotice < 15000) return;
+        lastNotice = Date.now();
+        transport.notice(DIRECT_BLOCKED_HOST);
+      };
+      const giveUp = setTimeout(failed, 25000);
+      const accept = () => {
+        opened = true;
+        clearTimeout(giveUp);
+        transport.accept(new PeerConnection(conn));
+      };
       if (conn.open) accept();
       else conn.on('open', accept);
+      conn.on('error', (err) => {
+        if (DIRECT_FAILURES.has(err?.type)) failed();
+      });
     });
     // Losing the signaling server only stops new guests from joining; try to get it back.
     peer.on('disconnected', () => {
@@ -185,7 +212,7 @@ export async function joinPeer(code, { ice = {}, timeoutMs = 20000, onStatus = (
   onStatus('Connecting to the host…');
   const conn = peer.connect(PEER_PREFIX + code, { reliable: true, serialization: 'json' });
   const result = await new Promise((resolve) => {
-    const timer = setTimeout(() => resolve({ type: 'timeout', message: 'Could not connect to the host. Both networks may be blocking connections: try your own TURN server (Advanced) or the relay server.' }), timeoutMs);
+    const timer = setTimeout(() => resolve({ type: 'direct-timeout' }), timeoutMs);
     conn.on('open', () => {
       clearTimeout(timer);
       resolve('open');

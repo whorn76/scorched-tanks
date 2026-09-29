@@ -17,7 +17,7 @@ export function logo() {
   return h('div', { class: 'logo' }, h('span', { class: 'logo-top', text: 'SCORCHED' }), h('span', { class: 'logo-bottom', text: 'TANKS' }));
 }
 
-export function titleScreen({ onLocal, onHost, onJoin, onSettings, onHelp }) {
+export function titleScreen({ onLocal, onHost, onJoin, onSettings, onHelp, version = 'dev' }) {
   return h(
     'div',
     { class: 'panel title-panel', id: 'title-screen' },
@@ -31,7 +31,7 @@ export function titleScreen({ onLocal, onHost, onJoin, onSettings, onHelp }) {
       h('div', { class: 'row' },
         h('button', { class: 'btn', id: 'btn-settings', onclick: onSettings, text: 'Settings' }),
         h('button', { class: 'btn', id: 'btn-help', onclick: onHelp, text: 'How to Play' }))),
-    h('p', { class: 'fineprint', text: 'A tribute to Scorched Earth (1991). Press H any time for help.' }),
+    h('p', { class: 'fineprint', text: `A tribute to Scorched Earth (1991). Press H any time for help.${version === 'dev' ? '' : ` Version ${version.slice(0, 7)}.`}` }),
   );
 }
 

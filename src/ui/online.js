@@ -18,7 +18,7 @@ function connectionFields(opts, { sameOrigin }) {
     id: 'relay-hint',
     text: sameOrigin
       ? 'This site runs a relay, so its address is filled in.'
-      : 'This site does not run a relay. Paste the https address of a server running "npm start" (for example a cloudflared tunnel). The invite link passes it on to your friends.',
+      : 'This site does not run a relay. Start one on your PC with "npm run online" and paste the address it prints. The invite link passes it on to your friends.',
   });
   const relayRow = h('div', { class: 'field indent', hidden: opts.transport !== 'relay' }, h('label', { for: 'relay-url', text: 'Relay server address' }), relayInput, relayHint);
   const radio = (value, label, hint) =>
@@ -41,12 +41,12 @@ function connectionFields(opts, { sameOrigin }) {
   return [
     h('div', { class: 'field' },
       h('span', { class: 'field-label', text: 'Connection' }),
-      radio('peer', 'Direct (peer-to-peer)', 'WebRTC through the free PeerJS service. Best for most people.'),
-      radio('relay', 'Relay server', 'Every message goes through a server running "npm start". Use when direct connections fail.')),
+      radio('peer', 'Direct (peer-to-peer)', 'WebRTC through the free PeerJS service. Nothing to set up, but some networks block it.'),
+      radio('relay', 'Relay server', 'Every message goes through a relay server ("npm run online" starts one). Works on any network.')),
     relayRow,
     h('details', { class: 'advanced' },
       h('summary', { text: 'Advanced: TURN server' }),
-      h('p', { class: 'hint', text: 'Most home networks connect directly. Strict ones (some mobile carriers, offices and schools) can block that. If joining times out, use the relay server, or enter a TURN server here to pass the connection through. Both players should use the same one.' }),
+      h('p', { class: 'hint', text: 'Direct connections often fail between different internet connections (mobile data, many routers, offices and schools). If joining fails, use a relay server, or enter a TURN server here to pass the connection through. Both players should use the same one.' }),
       turnField('turnUrl', 'TURN URL(s)', 'text', 'turn:turn.example.com:3478'),
       turnField('turnUser', 'Username'),
       turnField('turnPass', 'Password', 'password')),
@@ -163,12 +163,12 @@ export class Lobby {
       this.note.textContent = `${players.length} of ${MAX_TANKS} tanks · ${humans} of ${MAX_HUMANS} people.` + (this.isHost && players.length < 2 ? ' Add an AI tank or wait for a friend to join.' : '');
       if (this.startButton) this.startButton.disabled = players.length < 2;
     }
-    const settings = this.isHost ? this.session.settings : this.session.lobby?.settings ?? {};
-    const skey = JSON.stringify(settings);
+    const settings = this.isHost ? this.session.settings : this.session.lobby?.settings;
+    const skey = settings ? JSON.stringify(settings) : 'waiting';
     if (skey !== this.lastSettings) {
       this.lastSettings = skey;
       const copy = { ...settings };
-      this.settingsBox.replaceChildren(settingsForm(copy, {
+      this.settingsBox.replaceChildren(!settings ? h('p', { class: 'hint', text: 'Waiting for the host’s settings…' }) : settingsForm(copy, {
         keys: GAMEPLAY_KEYS,
         readOnly: !this.isHost,
         onChange: (s) => {

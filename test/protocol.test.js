@@ -9,9 +9,11 @@ import {
   normalizeRoomCode,
   parseGuestMessage,
   parseHostMessage,
+  versionMismatchReason,
 } from '../src/net/protocol.js';
 import { detectSameOriginRelay, normalizeRelayUrl, relayUrlProblem, sameOriginRelayUrl } from '../src/net/relayTransport.js';
-import { iceServers, turnProblem } from '../src/net/peerTransport.js';
+import { DIRECT_BLOCKED_GUEST, iceServers, peerError, turnProblem } from '../src/net/peerTransport.js';
+import { DEFAULT_SETTINGS } from '../src/core/constants.js';
 
 test('room codes are 5 characters from an alphabet without look-alikes', () => {
   for (const bad of '0O1IL5S2Z8BUV') assert.ok(!ROOM_ALPHABET.includes(bad), `${bad} is excluded`);
@@ -82,6 +84,41 @@ test('host messages are validated too', () => {
   assert.equal(chat.text, 'hi there');
 });
 
+test('lobby settings from the host are sanitized before the UI shows them', () => {
+  const players = [{ slot: 0, name: 'Hosty', color: '#e8453c', kind: 'host' }];
+  const lobby = parseHostMessage({ t: 'lobby', players, code: 'ACEFG', settings: { rounds: 3, wind: 'hurricane', walls: { x: 1 }, admin: true } });
+  assert.equal(lobby.settings.rounds, 3);
+  assert.equal(lobby.settings.wind, DEFAULT_SETTINGS.wind, 'unknown values fall back to the defaults');
+  assert.equal(lobby.settings.walls, DEFAULT_SETTINGS.walls);
+  assert.equal('admin' in lobby.settings, false);
+  assert.deepEqual(parseHostMessage({ t: 'lobby', players, code: 'ACEFG' }).settings, { ...DEFAULT_SETTINGS });
+});
+
+test('version mismatches tell whoever has the older copy to reload', () => {
+  assert.match(versionMismatchReason(2, 3), /host is running an older version.*ask them to reload/i);
+  assert.match(versionMismatchReason(3, 2), /your copy of the game is out of date.*reload the page/i);
+  const current = parseHostMessage({ t: 'reject', reason: 'Nope', hostVersion: 7 });
+  assert.deepEqual(current, { t: 'reject', reason: 'Nope', hostVersion: 7 });
+  // Version 1 hosts only put their version in the text.
+  const legacy = parseHostMessage({ t: 'reject', reason: 'Version mismatch: the host runs protocol v1 and you have v2. Reload the page to update.' });
+  assert.equal(legacy.hostVersion, 1);
+  assert.equal(parseHostMessage({ t: 'reject', reason: 'That room is full.' }).hostVersion, undefined);
+  assert.equal(parseHostMessage({ t: 'reject', reason: 'x', hostVersion: 'v9' }).hostVersion, undefined, 'junk versions are ignored');
+  assert.equal(parseHostMessage({ t: 'reject' }).reason, 'Rejected by the host.');
+});
+
+test('failed direct connections get a clear explanation instead of PeerJS jargon', () => {
+  // What PeerJS reports when the two browsers can't reach each other.
+  const negotiation = { type: 'negotiation-failed', message: 'Negotiation of connection to scorchedtanks-ACEFG failed.' };
+  assert.equal(peerError(negotiation), DIRECT_BLOCKED_GUEST);
+  assert.equal(peerError({ type: 'connection-closed' }), DIRECT_BLOCKED_GUEST);
+  assert.equal(peerError({ type: 'direct-timeout' }), DIRECT_BLOCKED_GUEST);
+  assert.match(DIRECT_BLOCKED_GUEST, /relay/);
+  assert.match(peerError({ type: 'peer-unavailable' }), /No room with that code/);
+  assert.match(peerError({ type: 'network' }), /signaling server/);
+  assert.equal(peerError({ type: 'timeout', message: 'Timed out contacting the PeerJS server.' }), 'Timed out contacting the PeerJS server.');
+});
+
 test('cleanText strips control and direction-override characters', () => {
   assert.equal(cleanText('a\u0007b\u202ec\n d', 50), 'abc d');
   assert.equal(cleanText(null, 5), '');
@@ -144,7 +181,7 @@ test('the relay option only points at this site when it really runs a relay', as
 
 test('relay addresses that cannot work from this page are explained', () => {
   const https = { protocol: 'https:' };
-  assert.match(relayUrlProblem('', https), /npm start/);
+  assert.match(relayUrlProblem('', https), /npm run online/);
   assert.match(relayUrlProblem('ws://203.0.113.5:8080/ws', https), /https/, 'browsers block ws:// from https pages');
   assert.equal(relayUrlProblem('ws://localhost:8080/ws', https), '');
   assert.equal(relayUrlProblem('wss://x.trycloudflare.com/ws', https), '');

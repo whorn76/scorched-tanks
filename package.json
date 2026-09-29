@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "start": "node server/server.js",
+    "online": "node scripts/online.mjs",
     "test": "node --test \"test/*.test.js\"",
     "test:e2e": "node e2e/run.mjs"
   },

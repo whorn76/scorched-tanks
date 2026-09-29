@@ -1,6 +1,8 @@
 node_modules/
 test-results/
 playwright-report/
+_site/
+.cache/
 *.log
 .DS_Store
 Thumbs.db

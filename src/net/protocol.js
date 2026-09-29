@@ -2,7 +2,7 @@
 // and room codes. Every message is a JSON object with a string `t` (type). Anything malformed is
 // dropped. Only whitelisted fields survive, strings are length-limited and stripped of control
 // characters, and numbers must be finite and in range.
-import { MAX_POWER } from '../core/constants.js';
+import { MAX_POWER, sanitizeSettings } from '../core/constants.js';
 import { STOCK_IDS, WEAPON_IDS } from '../core/weapons.js';
 
 // Bump when the rules change, so mismatched copies of the game refuse to play together.
@@ -38,6 +38,17 @@ export function normalizeRoomCode(text) {
     .filter((c) => ROOM_ALPHABET.includes(c))
     .join('');
   return clean.length === ROOM_CODE_LENGTH ? clean : '';
+}
+
+/**
+ * What to tell a guest whose copy of the game has a different protocol version than the
+ * host's. Whoever has the older copy is the one who needs to reload.
+ */
+export function versionMismatchReason(hostVersion, guestVersion) {
+  if (guestVersion > hostVersion) {
+    return `The host is running an older version of the game (v${hostVersion}; you have v${guestVersion}). Ask them to reload their page and create a new room.`;
+  }
+  return `Your copy of the game is out of date (v${guestVersion}; the host has v${hostVersion}). Reload the page to update, then join again.`;
 }
 
 // --- Field checks ------------------------------------------------------------------------------
@@ -122,13 +133,18 @@ export function parseHostMessage(msg) {
   switch (msg.t) {
     case 'welcome':
       return isInt(msg.v, 0, 1e6) && isInt(msg.slot, 0, 1e9) ? { t: 'welcome', v: msg.v, slot: msg.slot } : null;
-    case 'reject':
-      return { t: 'reject', reason: cleanText(msg.reason, 200) || 'Rejected by the host.' };
+    case 'reject': {
+      const reason = cleanText(msg.reason, 200) || 'Rejected by the host.';
+      // Hosts since v2 send their version; v1 hosts only mention it in the text.
+      const legacy = /host runs protocol v(\d+)/.exec(reason);
+      const hostVersion = isInt(msg.hostVersion, 0, 1e6) ? msg.hostVersion : legacy ? Number(legacy[1]) : null;
+      return hostVersion === null ? { t: 'reject', reason } : { t: 'reject', reason, hostVersion };
+    }
     case 'lobby': {
       if (!Array.isArray(msg.players) || msg.players.length > 8) return null;
       const players = msg.players.map(cleanLobbyPlayer);
       if (players.some((p) => !p)) return null;
-      return { t: 'lobby', players, settings: isObject(msg.settings) ? msg.settings : {}, code: cleanText(msg.code, 16) };
+      return { t: 'lobby', players, settings: sanitizeSettings(msg.settings), code: cleanText(msg.code, 16) };
     }
     case 'start':
       if (!isInt(msg.seq, 0, 1e9) || !isInt(msg.you, 0, 16) || !isObject(msg.snapshot)) return null;

@@ -16,6 +16,7 @@ import {
   SNAPSHOT_CHUNK,
   cleanText,
   parseGuestMessage,
+  versionMismatchReason,
 } from '../net/protocol.js';
 
 const AIM_BROADCAST_TICKS = 5; // ≈ 12 aim previews per second
@@ -59,6 +60,7 @@ export class HostSession extends AuthoritySession {
     this.lastAimTick = new Map();
     this.syncsSent = 0;
     transport.onConnection((conn) => this.onConnection(conn));
+    transport.onNotice?.((text) => this.pushEvent({ type: 'net', level: 'warn', text }));
     transport.onClose((reason) => {
       if (this.status !== 'ended') this.pushEvent({ type: 'net', level: 'warn', text: `Room connection lost (${reason}). Guests already here stay connected.` });
     });
@@ -163,10 +165,10 @@ export class HostSession extends AuthoritySession {
     peer.helloTimer.unref?.();
   }
 
-  rejectPeer(peer, reason) {
+  rejectPeer(peer, reason, extra = null) {
     if (peer.state === 'closed') return;
     clearTimeout(peer.helloTimer);
-    peer.conn.send({ t: 'reject', reason });
+    peer.conn.send({ t: 'reject', reason, ...extra });
     const wasState = peer.state;
     peer.state = 'rejected';
     const timer = setTimeout(() => peer.conn.close(), 150);
@@ -212,7 +214,11 @@ export class HostSession extends AuthoritySession {
     clearTimeout(peer.helloTimer);
     if (msg.t !== 'hello') return this.rejectPeer(peer, 'Unexpected message before the handshake.');
     if (msg.v !== PROTOCOL_VERSION) {
-      return this.rejectPeer(peer, `Version mismatch: the host runs protocol v${PROTOCOL_VERSION} and you have v${msg.v}. Reload the page to update.`);
+      if (msg.v > PROTOCOL_VERSION) {
+        // It's this page that's out of date, so tell the host too.
+        this.pushEvent({ type: 'net', level: 'warn', text: `${msg.name || 'A player'} has a newer version of the game and couldn't join. Reload this page to update, then create a new room.` });
+      }
+      return this.rejectPeer(peer, versionMismatchReason(PROTOCOL_VERSION, msg.v), { hostVersion: PROTOCOL_VERSION });
     }
     if (this.status !== 'lobby') return this.rejectPeer(peer, 'That game has already started.');
     if (this.humans() >= MAX_HUMANS || this.lobbyPlayers.length >= MAX_TANKS) return this.rejectPeer(peer, 'That room is full.');

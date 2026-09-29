@@ -1,10 +1,15 @@
-// A stand-in for GitHub Pages in the browser tests: serves only the files that
-// .github/workflows/pages.yml publishes, under a /scorched-tanks/ subpath, with no relay.
+// A stand-in for GitHub Pages in the browser tests: packages the site exactly the way
+// .github/workflows/pages.yml does (scripts/package-pages.mjs) and serves it under a
+// /scorched-tanks/ subpath, with no relay.
 import { createServer } from 'node:http';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { extname, join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { extname, join, normalize, sep } from 'node:path';
+import { packagePages } from '../scripts/package-pages.mjs';
 
-const PUBLISHED = [/^index\.html$/, /^styles\.css$/, /^relay\.json$/, /^src\//, /^vendor\//];
+export const STATIC_VERSION = 'e2e';
+
 const TYPES = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -12,7 +17,9 @@ const TYPES = {
   '.json': 'application/json; charset=utf-8',
 };
 
-export async function startStaticHost(root, prefix = '/scorched-tanks/') {
+export async function startStaticHost(prefix = '/scorched-tanks/') {
+  const site = mkdtempSync(join(tmpdir(), 'scorched-pages-'));
+  packagePages(site, STATIC_VERSION);
   const server = createServer(async (req, res) => {
     let path;
     try {
@@ -21,14 +28,17 @@ export async function startStaticHost(root, prefix = '/scorched-tanks/') {
       res.writeHead(400).end('Bad request');
       return;
     }
-    const rel = path.startsWith(prefix) ? path.slice(prefix.length) || 'index.html' : null;
-    if (!rel || rel.includes('..') || rel.includes('\\') || !PUBLISHED.some((re) => re.test(rel))) {
+    let rel = path.startsWith(prefix) ? path.slice(prefix.length) : null;
+    if (rel === '' || rel?.endsWith('/')) rel += 'index.html';
+    const file = rel === null ? null : normalize(join(site, rel));
+    if (!file || !file.startsWith(site + sep)) {
       res.writeHead(404).end('Not found');
       return;
     }
     try {
-      res.writeHead(200, { 'Content-Type': TYPES[extname(rel)] ?? 'application/octet-stream' });
-      res.end(await readFile(join(root, rel)));
+      const body = await readFile(file);
+      res.writeHead(200, { 'Content-Type': TYPES[extname(file)] ?? 'application/octet-stream' });
+      res.end(body);
     } catch {
       res.writeHead(404).end('Not found');
     }
@@ -36,6 +46,12 @@ export async function startStaticHost(root, prefix = '/scorched-tanks/') {
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   return {
     url: `http://127.0.0.1:${server.address().port}${prefix}`,
-    close: () => new Promise((resolve) => server.close(resolve)),
+    close: () =>
+      new Promise((resolve) => {
+        server.close(() => {
+          rmSync(site, { recursive: true, force: true });
+          resolve();
+        });
+      }),
   };
 }

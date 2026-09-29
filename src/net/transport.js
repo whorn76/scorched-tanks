@@ -3,7 +3,7 @@
 // an in-process loopback:
 //
 //   Connection     { id, send(msg), onMessage(fn), onClose(fn), close() }
-//   HostTransport  { code, kind, inviteParams, onConnection(fn), onClose(fn), close() }
+//   HostTransport  { code, kind, inviteParams, onConnection(fn), onClose(fn), onNotice(fn), close() }
 //
 // Messages are plain JSON-serializable objects.
 
@@ -57,6 +57,7 @@ export class HostTransportBase {
     this.inviteParams = {};
     this.connectionHandlers = [];
     this.closeHandlers = [];
+    this.noticeHandlers = [];
     this.closed = false;
   }
 
@@ -68,8 +69,17 @@ export class HostTransportBase {
     this.closeHandlers.push(fn);
   }
 
+  /** Things the host should know that aren't about a connected guest (like a failed join). */
+  onNotice(fn) {
+    this.noticeHandlers.push(fn);
+  }
+
   accept(conn) {
     for (const fn of this.connectionHandlers) fn(conn);
+  }
+
+  notice(text) {
+    for (const fn of this.noticeHandlers) fn(text);
   }
 
   fireClose(reason = 'closed') {

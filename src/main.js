@@ -9,6 +9,7 @@ import { GuestSession } from './session/guest.js';
 import { normalizeRoomCode } from './net/protocol.js';
 import { detectSameOriginRelay, hostRelay, joinRelay, normalizeRelayUrl, relayUrlProblem } from './net/relayTransport.js';
 import { hostPeer, joinPeer, turnProblem } from './net/peerTransport.js';
+import { BUILD, updateAvailable } from './version.js';
 import { Renderer } from './render/renderer.js';
 import { Bubbles } from './render/bubbles.js';
 import { Sound } from './audio.js';
@@ -25,6 +26,15 @@ import { loadLineup, loadMuted, loadOnline, loadSettings, saveLineup, saveMuted,
 const canvas = document.getElementById('game');
 const uiRoot = document.getElementById('ui');
 const toasts = document.getElementById('toasts');
+
+// index.html reloads the page once if the game's files can't be loaded (an old cached copy of
+// the page after an update). They loaded, so allow that again.
+try {
+  sessionStorage.removeItem('scorched-tanks-reload');
+} catch {
+  // Storage can be unavailable (private modes); there's nothing to clear then.
+}
+
 const renderer = new Renderer(canvas);
 const bubbles = new Bubbles();
 renderer.bubbles = bubbles;
@@ -73,7 +83,8 @@ uiRoot.addEventListener('click', (e) => {
 function toast(text, kind = '') {
   const el = h('div', { class: `toast ${kind}`, text });
   toasts.append(el);
-  setTimeout(() => el.remove(), 3600);
+  // Long messages stay up long enough to read.
+  setTimeout(() => el.remove(), Math.min(12000, Math.max(3600, String(text).length * 55)));
   while (toasts.children.length > 4) toasts.firstChild.remove();
 }
 
@@ -88,12 +99,13 @@ function setOverlay(key, build, { dim = false } = {}) {
 
 function menuOverlay() {
   if (app.message) {
-    const { title, text } = app.message;
-    return [`message:${title}:${text}`, () => screens.messageScreen({ title, text, onOk: () => (app.message = null) })];
+    const { title, text, okText, onOk } = app.message;
+    return [`message:${title}:${text}`, () => screens.messageScreen({ title, text, okText, onOk: onOk ?? (() => (app.message = null)) })];
   }
   switch (app.screen) {
     case 'title':
       return ['title', () => screens.titleScreen({
+        version: BUILD,
         onLocal: () => go('setup'),
         onHost: () => go('host'),
         onJoin: () => go('join'),
@@ -124,11 +136,13 @@ function menuOverlay() {
 
 function onlineOverlay(session) {
   if (session.status === 'ended') {
+    // A guest whose copy of the game is older than the host's can fix it by reloading.
+    const reload = !!session.updateNeeded;
     return ['ended', () => screens.messageScreen({
-      title: session.isAuthority ? 'Game closed' : 'Disconnected',
+      title: session.versionMismatch ? 'Different versions' : session.isAuthority ? 'Game closed' : 'Disconnected',
       text: session.endReason || 'The game has ended.',
-      onOk: quitToTitle,
-      okText: 'Back to menu',
+      onOk: reload ? () => reloadWithInvite(session.invite) : quitToTitle,
+      okText: reload ? 'Reload' : 'Back to menu',
     }), true];
   }
   if (session.status === 'connecting') return ['joining', () => waitingScreen('Joining…', 'Saying hello to the host.', quitToTitle), true];
@@ -318,6 +332,31 @@ function setStatus(ui, text, error = false) {
   ui.status.classList.toggle('error', error);
 }
 
+/** Reloads the page to pick up a new version, coming back to the join screen for `invite`. */
+function reloadWithInvite(invite) {
+  const params = new URLSearchParams();
+  if (invite?.code) params.set('join', invite.code);
+  if (invite?.relay) params.set('relay', invite.relay);
+  const hash = params.toString();
+  history.replaceState(null, '', `${location.pathname}${location.search}${hash ? `#${hash}` : ''}`);
+  location.reload();
+}
+
+/**
+ * Asks to reload first if a newer version has been published since this page loaded, so
+ * nobody hosts or joins with an old copy. Returns true if it did.
+ */
+async function offeredUpdate(invite = null) {
+  if (!(await updateAvailable())) return false;
+  app.message = {
+    title: 'Update available',
+    text: 'A newer version of Scorched Tanks is out. Reload to get it, so you and your friends run the same version.',
+    okText: 'Reload',
+    onOk: () => reloadWithInvite(invite),
+  };
+  return true;
+}
+
 async function createRoom(opts, ui) {
   if (app.busy) return;
   app.busy = true;
@@ -325,6 +364,7 @@ async function createRoom(opts, ui) {
   opts.name = (opts.name || '').trim().slice(0, 16) || 'Host';
   saveOnline(opts);
   try {
+    if (await offeredUpdate()) return;
     let transport;
     if (opts.transport === 'relay') {
       const url = await relayAddress(opts);
@@ -356,6 +396,8 @@ async function joinRoom(codeText, opts, ui) {
   opts.name = (opts.name || '').trim().slice(0, 16) || 'Guest';
   saveOnline(opts);
   try {
+    const invite = { code, relay: opts.transport === 'relay' ? normalizeRelayUrl(opts.relayUrl || app.sameOriginRelay) : '' };
+    if (await offeredUpdate(invite)) return;
     let conn;
     if (opts.transport === 'relay') {
       const url = await relayAddress(opts);
@@ -364,7 +406,9 @@ async function joinRoom(codeText, opts, ui) {
     } else {
       conn = await joinPeer(code, { ice: iceOptions(opts), onStatus: (t) => setStatus(ui, t) });
     }
-    startSession(new GuestSession({ conn, name: opts.name }));
+    const session = new GuestSession({ conn, name: opts.name });
+    session.invite = invite;
+    startSession(session);
   } catch (error) {
     setStatus(ui, error.message || String(error), true);
   } finally {
@@ -376,8 +420,11 @@ async function joinRoom(codeText, opts, ui) {
 chat.onSend((text) => app.session?.sendChat?.(text));
 
 // Offer this site as the relay only if it really runs one (not on GitHub Pages, for example).
+// When it does, the relay is also the better default: it works on any network, while direct
+// connections between different internet connections often can't get through.
 app.relayProbe = detectSameOriginRelay().then((url) => {
   app.sameOriginRelay = url;
+  if (url && !app.online.transportChosen && !app.joinCode) app.online.transport = 'relay';
   app.relayChecked = true;
 });
 

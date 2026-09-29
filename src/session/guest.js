@@ -5,7 +5,7 @@
 import { Session } from './session.js';
 import { hashGame } from '../core/hash.js';
 import { loadSnapshot } from '../core/snapshot.js';
-import { MAX_SNAPSHOT_PARTS, PROTOCOL_VERSION, parseHostMessage } from '../net/protocol.js';
+import { MAX_SNAPSHOT_PARTS, PROTOCOL_VERSION, parseHostMessage, versionMismatchReason } from '../net/protocol.js';
 
 export class GuestSession extends Session {
   constructor({ conn, name = 'Guest' }) {
@@ -51,10 +51,17 @@ export class GuestSession extends Session {
         this.pushEvent({ type: 'welcome' });
         break;
       case 'reject':
-        this.endReason = msg.reason;
-        this.pushEvent({ type: 'rejected', reason: msg.reason });
+        if (msg.hostVersion !== undefined && msg.hostVersion !== PROTOCOL_VERSION) {
+          // Our own words, so it names the side that's out of date even if the host is old.
+          this.versionMismatch = true;
+          this.updateNeeded = msg.hostVersion > PROTOCOL_VERSION;
+          this.endReason = versionMismatchReason(msg.hostVersion, PROTOCOL_VERSION);
+        } else {
+          this.endReason = msg.reason;
+        }
+        this.pushEvent({ type: 'rejected', reason: this.endReason });
         this.status = 'ended';
-        this.pushEvent({ type: 'ended', reason: msg.reason });
+        this.pushEvent({ type: 'ended', reason: this.endReason });
         this.conn.close();
         break;
       case 'lobby':

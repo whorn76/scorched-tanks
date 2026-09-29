@@ -21,6 +21,12 @@
     <div id="chat" class="chat" hidden></div>
     <div id="toasts" class="toasts" aria-live="polite"></div>
     <noscript>Scorched Tanks needs JavaScript enabled.</noscript>
-    <script type="module" src="src/main.js"></script>
+    <!-- If the game's files can't be loaded (an old cached copy of this page after an update
+         moved them), reload once to get the current page. -->
+    <script
+      type="module"
+      src="src/main.js"
+      onerror="try { if (!sessionStorage.getItem('scorched-tanks-reload')) { sessionStorage.setItem('scorched-tanks-reload', '1'); location.reload(); } } catch (e) {}"
+    ></script>
   </body>
 </html>

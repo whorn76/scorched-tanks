@@ -36,10 +36,11 @@ export function loadOnline() {
   return {
     name: typeof online.name === 'string' ? online.name.slice(0, 16) : '',
     transport: online.transport === 'relay' ? 'relay' : 'peer',
+    transportChosen: online.transport === 'relay' || online.transport === 'peer', // picked before on this site
     relayUrl: typeof online.relayUrl === 'string' ? online.relayUrl.slice(0, 300) : '',
     turnUrl: typeof online.turnUrl === 'string' ? online.turnUrl.slice(0, 300) : '',
     turnUser: typeof online.turnUser === 'string' ? online.turnUser.slice(0, 200) : '',
     turnPass: typeof online.turnPass === 'string' ? online.turnPass.slice(0, 200) : '',
   };
 }
-export const saveOnline = (online) => write({ online });
+export const saveOnline = ({ transportChosen, ...online }) => write({ online });
