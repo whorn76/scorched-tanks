@@ -18,6 +18,7 @@ const ACTION_KEYS = {
   KeyD: 'driveRight',
   KeyS: 'shield',
   KeyB: 'battery',
+  KeyI: 'arsenal',
   KeyM: 'mute',
   Escape: 'pause',
   KeyH: 'help',

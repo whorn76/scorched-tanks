@@ -62,7 +62,7 @@ function hashTank(h, t) {
   h.num(t.angle).num(t.power).str(t.weapon).num(t.money);
   for (const id of STOCK_IDS) h.num(t.stock[id] ?? 0);
   h.num(t.shield).str(t.shieldType).bool(t.falling).num(t.vy).num(t.fallFrom).bool(t.chute);
-  h.int(t.dying).int(t.killer).int(t.lastHitBy).int(t.lastDamagedBy ?? -1).num(t.burn).int(t.moving).int(t.moveDir);
+  h.int(t.dying).int(t.killer).int(t.lastHitBy).int(t.lastDamagedBy ?? -1).num(t.burn).int(t.moving).int(t.moveDir).num(t.driveFrom);
   const s = t.stats;
   h.int(s.kills).num(s.damage).int(s.wins).int(s.deaths).num(s.selfDamage);
   h.num(t.round.damage).int(t.round.kills).num(t.round.earned);
@@ -89,6 +89,7 @@ export function hashGame(game) {
   h.int(s.v).str(s.phase).int(s.round).int(s.turnId).int(s.active).num(s.wind);
   h.str(s.walls).str(s.sky).int(s.ground).str(s.style).u32(s.rng.state).int(s.tick).int(s.roundTurns ?? 0);
   h.int(s.quiet).int(s.quietNeeded).bool(s.pendingTurnEnd).int(s.nextId);
+  h.int(s.rotation ?? 0).int(s.turnMask ?? 0).int(s.volleyTurn ?? -1);
   for (const key of Object.keys(s.settings).sort()) h.str(key).str(s.settings[key]);
   h.u32(s.tanks.length);
   for (const tank of s.tanks) hashTank(h, tank);

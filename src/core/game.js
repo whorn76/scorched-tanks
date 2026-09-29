@@ -6,6 +6,7 @@ import {
   DEATH_BLAST,
   DT,
   FALL,
+  FREE_DRIVE,
   FUEL_PER_CLIMB,
   FUEL_PER_PIXEL,
   GRAVITY,
@@ -16,6 +17,7 @@ import {
   MOVE_STEP,
   SKY_THEMES,
   SPEED_PER_POWER,
+  SUDDEN_DEATH,
   TANK,
   TERRAIN_STYLES,
   TIMING,
@@ -45,7 +47,7 @@ import {
 import { ECONOMY, buyProblem, clampMoney, sellProblem, sellUnits, sellValue } from './economy.js';
 import { base64ToInt16 } from './bytes.js';
 
-export const CORE_VERSION = 1;
+export const CORE_VERSION = 2; // 2: free driving each turn (tank.driveFrom), sudden death
 
 export const Phase = Object.freeze({
   SETUP: 'setup', // created, before the first round (or its shop)
@@ -55,6 +57,37 @@ export const Phase = Object.freeze({
   SHOP: 'shop',
   GAME_OVER: 'gameOver',
 });
+
+/**
+ * Rounds of turns left before sudden death starts (0 once it has started), or null when it's
+ * switched off. A "round of turns" is complete when every surviving tank has had a turn.
+ */
+export function suddenDeathIn(state) {
+  const after = state.settings.suddenDeath;
+  if (!after) return null;
+  return Math.max(0, after + 1 - state.rotation);
+}
+
+/** The columns a tank can drive between this turn without fuel: [left, right]. */
+export function freeDriveZone(tank) {
+  return [tank.driveFrom - FREE_DRIVE, tank.driveFrom + FREE_DRIVE];
+}
+
+/** True if driving onto column `x` this turn is free (within the tank's free zone). */
+export function freeDriveAt(tank, x) {
+  return Math.abs(x - tank.driveFrom) <= FREE_DRIVE;
+}
+
+/**
+ * Why the tank can't start driving in direction `dir` (-1 or 1) right now, or null if it can.
+ * Every tank can drive within its free zone; beyond it, driving takes fuel. (Slopes and the
+ * map's edges can still stop a drive once it's started.)
+ */
+export function driveProblem(tank, dir) {
+  if (dir !== -1 && dir !== 1) return 'bad direction';
+  if (freeDriveAt(tank, tank.x + dir) || tank.stock.fuel > 0) return null;
+  return 'no more driving this turn (fuel lets you go further)';
+}
 
 const isUint32 = (v) => Number.isInteger(v) && v >= 0 && v <= 0xffffffff;
 const isInt = (v, min, max) => Number.isInteger(v) && v >= min && v <= max;
@@ -92,6 +125,7 @@ export function createTank(player, index, money) {
     burn: 0,
     moving: 0,
     moveDir: 0,
+    driveFrom: 0, // where this tank started its current turn (the middle of its free drive zone)
     stats: { kills: 0, damage: 0, wins: 0, deaths: 0, selfDamage: 0 },
     round: { damage: 0, kills: 0, earned: 0 },
   };
@@ -115,6 +149,9 @@ export function createState({ settings, players }) {
     rng: new Rng(1),
     tick: 0,
     roundTurns: 0,
+    rotation: 0, // rounds of turns so far this round (1 while the first tanks take their turns)
+    turnMask: 0, // bit per tank that has had a turn in the current round of turns
+    volleyTurn: -1, // the turn whose sudden-death volley has already fallen
     quiet: 0,
     quietNeeded: 1,
     pendingTurnEnd: false,
@@ -227,9 +264,7 @@ export class Game {
       case 'move': {
         const bad = turnCheck();
         if (bad) return bad;
-        if (cmd.dir !== -1 && cmd.dir !== 1) return 'bad direction';
-        if (!(tank.stock.fuel > 0)) return 'no fuel';
-        return null;
+        return driveProblem(tank, cmd.dir);
       }
       case 'use': {
         const bad = turnCheck();
@@ -337,6 +372,9 @@ export class Game {
     s.lastShot = null;
     s.tick = 0;
     s.roundTurns = 1;
+    s.rotation = 1;
+    s.turnMask = 1 << cmd.first;
+    s.volleyTurn = -1;
     s.quiet = 0;
     s.pendingTurnEnd = false;
     s.tanks.forEach((tank, i) => this.resetTankForRound(tank, cmd.xs[i], heights[cmd.xs[i]]));
@@ -365,6 +403,7 @@ export class Game {
       chute: false,
       moving: 0,
       moveDir: 0,
+      driveFrom: x,
       burn: 0,
       angle: x < WIDTH / 2 ? 60 : 120,
       shield: 0,
@@ -509,7 +548,7 @@ export class Game {
     const s = this.state;
     const weapon = WEAPON_BY_ID[p.weapon];
     const direct = code === HIT_TANK || code === HIT_SHIELD;
-    if (!p.child && s.lastShot && !s.lastShot.impact) s.lastShot.impact = { x: p.x, y: p.y, tank: direct ? p.hitTank : -1 };
+    if (!p.child && !p.sky && s.lastShot && !s.lastShot.impact) s.lastShot.impact = { x: p.x, y: p.y, tank: direct ? p.hitTank : -1 };
     if (code === HIT_SHIELD) this.emit({ type: 'shieldHit', tank: p.hitTank, x: p.x, y: p.y });
     if (direct) this.emit({ type: 'directHit', tank: p.hitTank });
     if (code === HIT_WALL) this.emit({ type: 'wallHit', x: p.x, y: p.y });
@@ -1029,9 +1068,11 @@ export class Game {
     const ground = this.footGround(nx, top, tank.y + TANK.maxClimb);
     if (ground !== -1 && ground <= top) return stop('steep');
     const climb = ground === -1 ? 0 : Math.max(0, tank.y - ground);
-    const cost = FUEL_PER_PIXEL + climb * FUEL_PER_CLIMB;
-    if (tank.stock.fuel < cost) return stop('fuel');
-    tank.stock.fuel -= cost;
+    if (!freeDriveAt(tank, nx)) {
+      const cost = FUEL_PER_PIXEL + climb * FUEL_PER_CLIMB;
+      if (tank.stock.fuel < cost) return stop(tank.stock.fuel > 0 ? 'fuel' : 'range');
+      tank.stock.fuel -= cost;
+    }
     tank.x = nx;
     tank.moving--;
     if (ground !== -1) tank.y = Math.min(HEIGHT, ground);
@@ -1130,6 +1171,11 @@ export class Game {
     }
     const active = s.tanks[s.active];
     if (s.pendingTurnEnd || !active?.alive) {
+      // Sudden death: shells fall from the sky at the end of every turn.
+      if (suddenDeathIn(s) === 0 && s.volleyTurn !== s.turnId) {
+        s.volleyTurn = s.turnId;
+        if (this.skyVolley()) return;
+      }
       // A round can't go on forever (say, two tanks that keep missing each other).
       if (s.roundTurns >= this.turnLimit()) {
         this.endRound(true);
@@ -1137,6 +1183,31 @@ export class Game {
       }
       this.nextTurn();
     } else s.phase = Phase.AIM;
+  }
+
+  /**
+   * Drops a sudden-death volley: shells fall from above the screen near random survivors, more
+   * with every round of turns. The world stays busy until they've landed. Returns false if
+   * there was nothing to drop.
+   */
+  skyVolley() {
+    const s = this.state;
+    const living = s.tanks.filter((t) => t.alive);
+    if (!living.length) return false;
+    const into = s.rotation - s.settings.suddenDeath; // 1 in the first round of sudden death
+    const count = Math.min(SUDDEN_DEATH.maxShells, Math.max(1, into));
+    for (let i = 0; i < count; i++) {
+      const target = living[s.rng.int(living.length)];
+      const x = clamp(target.x + s.rng.intRange(-SUDDEN_DEATH.spread, SUDDEN_DEATH.spread), TANK.halfWidth, WIDTH - 1 - TANK.halfWidth);
+      const heavy = into >= SUDDEN_DEATH.heavyAfter && s.rng.chance(0.5);
+      const weapon = WEAPON_BY_ID[heavy ? 'babynuke' : 'missile'];
+      const vx = s.rng.intRange(-SUDDEN_DEATH.drift, SUDDEN_DEATH.drift);
+      this.spawnShell(weapon, -1, x, -SUDDEN_DEATH.height - i * SUDDEN_DEATH.gap, vx, 0, { armed: true, sky: true });
+    }
+    s.phase = Phase.BUSY;
+    s.quiet = 0;
+    this.emit({ type: 'skyVolley', count, heavy: into >= SUDDEN_DEATH.heavyAfter });
+    return true;
   }
 
   /** Turns in a round before time is called: plenty for every tank to get its shots in. */
@@ -1155,12 +1226,21 @@ export class Game {
         break;
       }
     }
+    // A round of turns is over when the turn comes back to a tank that already had one.
+    const bit = 1 << s.active;
+    if (s.turnMask & bit) {
+      s.rotation++;
+      s.turnMask = 0;
+      if (suddenDeathIn(s) === 0 && s.rotation === s.settings.suddenDeath + 1) this.emit({ type: 'suddenDeath', round: s.round });
+    }
+    s.turnMask |= bit;
     const windMax = WIND_MAX[s.settings.wind] ?? 0;
     if (s.settings.windChange && windMax > 0 && s.rng.chance(0.6)) {
       s.wind = clamp(s.wind + s.rng.intRange(-2, 2), -windMax, windMax);
     }
     for (const tank of s.tanks) tank.lastHitBy = -1;
     const tank = s.tanks[s.active];
+    tank.driveFrom = tank.x;
     if (tank.weapon !== FREE_WEAPON && !(tank.stock[tank.weapon] > 0)) tank.weapon = FREE_WEAPON;
     s.turnId++;
     s.roundTurns++;

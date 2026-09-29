@@ -43,7 +43,9 @@ export const FALL = {
 };
 
 export const MOVE_STEP = 10; // px driven per move command
-export const FUEL_PER_PIXEL = 1;
+/** Every tank may drive this far either way from where its turn started, without fuel: two tank lengths. */
+export const FREE_DRIVE = 4 * TANK.halfWidth;
+export const FUEL_PER_PIXEL = 1; // fuel per pixel driven beyond the free distance
 export const FUEL_PER_CLIMB = 2; // extra fuel per pixel climbed
 
 export const TIMING = {
@@ -54,6 +56,19 @@ export const TIMING = {
 
 /** A round ends after this many turns per tank; the healthiest survivor wins. */
 export const TURNS_PER_TANK = 25;
+
+/**
+ * Sudden death: once every tank has had `settings.suddenDeath` turns, shells fall from the sky
+ * after every turn, more with each round of turns, until one tank is left.
+ */
+export const SUDDEN_DEATH = {
+  spread: 140, // shells land within about this many px of a random surviving tank
+  maxShells: 6, // most shells in one volley
+  heavyAfter: 3, // from this many rounds of turns into sudden death, baby nukes fall too
+  height: 80, // px above the top of the screen where the first shell of a volley appears
+  gap: 90, // extra height between the shells of a volley, so they land one after another
+  drift: 20, // largest sideways speed (px/s) a shell starts with
+};
 
 export const DEATH_BLAST = { radius: 48, damage: 45 };
 
@@ -73,6 +88,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   sky: 'random',
   talk: true,
   turnTimer: 0,
+  suddenDeath: 12,
   volume: 70,
 });
 
@@ -87,6 +103,7 @@ export const SETTING_OPTIONS = Object.freeze({
   sky: ['day', 'sunset', 'night', 'storm', 'random'],
   talk: [true, false],
   turnTimer: [0, 30, 60, 90],
+  suddenDeath: [0, 8, 12, 16, 20], // turns each before shells start to rain; 0 = off
 });
 
 /** Returns a clean settings object: unknown keys dropped, bad values replaced by defaults. */

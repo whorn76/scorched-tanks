@@ -3,7 +3,7 @@
 // comes from an offscreen canvas that only re-uploads dirty rectangles; everything else is
 // vector drawing each frame. Game events (explosions, deaths…) spawn purely visual effects.
 import { HEIGHT, MAX_POWER, TANK, WIDTH, WIND_MAX } from '../core/constants.js';
-import { Phase } from '../core/game.js';
+import { Phase, freeDriveZone, suddenDeathIn } from '../core/game.js';
 import { FREE_WEAPON, WEAPON_BY_ID } from '../core/weapons.js';
 import { LOOSE } from '../core/terrain.js';
 import { buildPalette, hexToRgb } from './palette.js';
@@ -14,7 +14,23 @@ import { Effects } from './effects.js';
 export const FONT = '"Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif';
 export const DISPLAY_FONT = '"Arial Black", "Segoe UI Black", Impact, "Helvetica Neue", sans-serif';
 export const HUD_HEIGHT = 58;
+/** The parts of the top bar that open the weapons & items menu, as [left, right] x ranges. */
+export const HUD_ZONES = { health: [216, 298], weapon: [596, 804], items: [1150, 1276] };
 const TAU = Math.PI * 2;
+
+/** Which clickable part of the top bar is at (x, y), in game coordinates, or null. */
+export function hudZoneAt(x, y) {
+  if (y < 0 || y >= HUD_HEIGHT) return null;
+  for (const [zone, [left, right]] of Object.entries(HUD_ZONES)) if (x >= left && x < right) return zone;
+  return null;
+}
+
+/** The local player's aim for `tank` while it's their turn (their own drive included), or null. */
+function localAimFor(view, s, tank) {
+  const aim = view.aim;
+  if (!aim || aim.playerId !== tank.id || s.active !== tank.id) return null;
+  return s.phase === Phase.AIM || (s.phase === Phase.BUSY && !s.pendingTurnEnd) ? aim : null;
+}
 
 const shade = (hex, f) => {
   const [r, g, b] = hexToRgb(hex);
@@ -110,11 +126,16 @@ export class Renderer {
     return { x: ((clientX - rect.left) / rect.width) * WIDTH, y: ((clientY - rect.top) / rect.height) * HEIGHT };
   }
 
+  hudZoneAt(x, y) {
+    return hudZoneAt(x, y);
+  }
+
   resetRound() {
     this.trails.clear();
     this.tracers = [];
     this.effects.clear();
     this.tankFx.clear();
+    this.banner = null;
   }
 
   prepareRound(state) {
@@ -184,6 +205,10 @@ export class Renderer {
         fx.text(tank.x, tank.y - 50, 'DESTROYED', '#ffd36a', 16);
         break;
       }
+      case 'suddenDeath':
+        this.banner = { title: 'SUDDEN DEATH', text: 'Shells fall from the sky after every turn', age: 0 };
+        fx.shake(6);
+        break;
       case 'round':
         this.resetRound();
         break;
@@ -257,6 +282,7 @@ export class Renderer {
     this.view?.drawUnderTanks?.(ctx, game, view);
     this.drawTracers(ctx);
     this.drawNapalm(ctx, s, view.time);
+    this.drawDriveZone(ctx, game, view);
     for (const tank of s.tanks) this.drawTank(ctx, tank, game, session, view);
     this.drawTrails(ctx);
     this.drawProjectiles(ctx, s, view.time);
@@ -270,6 +296,8 @@ export class Renderer {
 
     ctx.setTransform(k, 0, 0, k, 0, 0);
     this.effects.drawFlash(ctx, WIDTH, HEIGHT);
+    this.drawSuddenDeathGlow(ctx, s, view.time);
+    this.drawBanner(ctx, view.dt);
     if (view.dim) {
       ctx.fillStyle = `rgba(6,10,20,${view.dim})`;
       ctx.fillRect(0, 0, WIDTH, HEIGHT);
@@ -518,7 +546,8 @@ export class Renderer {
   /** Where the barrel points for a tank: the local aim, a remote preview, or its last shot. */
   barrelAngle(tank, session, view) {
     const s = session.game.state;
-    if (view.aim && s.active === tank.id && s.phase === Phase.AIM && view.aim.playerId === tank.id) return view.aim.angle;
+    const local = localAimFor(view, s, tank);
+    if (local) return local.angle;
     const preview = session.previews.get(tank.id);
     if (preview && s.active === tank.id) return preview.angle;
     return tank.angle;
@@ -781,7 +810,8 @@ export class Renderer {
       if (p.y >= HUD_HEIGHT - 4) continue;
       const x = Math.max(12, Math.min(WIDTH - 12, p.x));
       const top = HUD_HEIGHT + 6;
-      ctx.fillStyle = 'rgba(255,220,120,0.95)';
+      // Shells falling in sudden death are marked in red.
+      ctx.fillStyle = p.sky ? 'rgba(255,90,70,0.95)' : 'rgba(255,220,120,0.95)';
       ctx.beginPath();
       ctx.moveTo(x, top);
       ctx.lineTo(x - 7, top + 11);
@@ -790,9 +820,102 @@ export class Renderer {
       ctx.fill();
       ctx.font = `600 11px ${FONT}`;
       ctx.textAlign = 'center';
-      ctx.fillStyle = 'rgba(255,230,160,0.95)';
+      ctx.fillStyle = p.sky ? 'rgba(255,170,150,0.95)' : 'rgba(255,230,160,0.95)';
       ctx.fillText(`${Math.round(HUD_HEIGHT - p.y)}`, x, top + 24);
     }
+  }
+
+  /** Posts at the two ends of the local player's free drive zone, while it's their turn. */
+  drawDriveZone(ctx, game, view) {
+    const s = game.state;
+    const tank = view.aim ? s.tanks[view.aim.playerId] : null;
+    if (!tank?.alive || view.aim.fired || !localAimFor(view, s, tank)) return;
+    const [from, to] = freeDriveZone(tank);
+    for (const [x, dir] of [[from, 1], [to, -1]]) {
+      if (x < TANK.halfWidth || x > WIDTH - 1 - TANK.halfWidth) continue; // past the edge of the map
+      const ground = this.surfaceNear(game.terrain, x, tank.y);
+      const top = ground - 22;
+      ctx.lineCap = 'round';
+      ctx.strokeStyle = 'rgba(0,0,0,0.45)';
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.moveTo(x, ground);
+      ctx.lineTo(x, top);
+      ctx.stroke();
+      ctx.strokeStyle = tank.color;
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      // A small pennant pointing back toward the tank.
+      ctx.fillStyle = tank.color;
+      ctx.beginPath();
+      ctx.moveTo(x, top);
+      ctx.lineTo(x + dir * 10, top + 4);
+      ctx.lineTo(x, top + 8);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.lineCap = 'butt';
+  }
+
+  /** The top of the ground in column x, searching up or down from `nearY`. */
+  surfaceNear(terrain, x, nearY) {
+    let y = Math.max(0, Math.min(HEIGHT - 1, Math.round(nearY)));
+    if (terrain.isSolid(x, y)) {
+      while (y > 0 && terrain.isSolid(x, y - 1)) y--;
+      return y;
+    }
+    while (y < HEIGHT && !terrain.isSolid(x, y)) y++;
+    return y;
+  }
+
+  /** A red glow over the sky while sudden death is on. */
+  drawSuddenDeathGlow(ctx, s, time) {
+    if (suddenDeathIn(s) !== 0 || (s.phase !== Phase.AIM && s.phase !== Phase.BUSY)) return;
+    const strength = 0.16 + Math.sin(time * 2.2) * 0.05;
+    const grad = ctx.createLinearGradient(0, 0, 0, 240);
+    grad.addColorStop(0, `rgba(255,50,30,${strength.toFixed(3)})`);
+    grad.addColorStop(1, 'rgba(255,50,30,0)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, WIDTH, 240);
+  }
+
+  /** The big "SUDDEN DEATH" announcement: pops in, holds, fades. */
+  drawBanner(ctx, dt) {
+    const b = this.banner;
+    if (!b) return;
+    b.age += dt;
+    const life = 3.4;
+    if (b.age >= life) {
+      this.banner = null;
+      return;
+    }
+    const alpha = Math.max(0, Math.min(1, b.age / 0.2, (life - b.age) / 0.6));
+    const scale = 1 + Math.max(0, 0.25 - b.age) * 1.6;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.translate(WIDTH / 2, HEIGHT * 0.36);
+    ctx.fillStyle = 'rgba(40,4,4,0.55)';
+    ctx.fillRect(-WIDTH / 2, -62, WIDTH, 104);
+    ctx.scale(scale, scale);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'alphabetic';
+    ctx.font = `900 64px ${DISPLAY_FONT}`;
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = 8;
+    ctx.strokeStyle = 'rgba(0,0,0,0.7)';
+    ctx.strokeText(b.title, 0, 4);
+    const grad = ctx.createLinearGradient(0, -50, 0, 6);
+    grad.addColorStop(0, '#fff1a8');
+    grad.addColorStop(0.5, '#ff9a3c');
+    grad.addColorStop(1, '#e8331f');
+    ctx.fillStyle = grad;
+    ctx.fillText(b.title, 0, 4);
+    ctx.font = `700 18px ${FONT}`;
+    ctx.lineWidth = 4;
+    ctx.strokeText(b.text, 0, 32);
+    ctx.fillStyle = '#ffe2d0';
+    ctx.fillText(b.text, 0, 32);
+    ctx.restore();
   }
 
   // --- HUD -----------------------------------------------------------------------------------
@@ -806,18 +929,46 @@ export class Renderer {
     ctx.fillRect(0, HUD_HEIGHT - 1, WIDTH, 1);
     if (!tank) return;
 
-    const local = view.aim && view.aim.playerId === tank.id && s.phase === Phase.AIM ? view.aim : null;
+    const local = localAimFor(view, s, tank);
     const preview = session.previews.get(tank.id);
     const angle = local?.angle ?? preview?.angle ?? tank.angle;
     const power = local?.power ?? preview?.power ?? tank.power;
     const weaponId = local?.weaponId ?? preview?.weaponId ?? tank.weapon;
     const weapon = WEAPON_BY_ID[weaponId] ?? WEAPON_BY_ID[FREE_WEAPON];
 
-    const label = (text, x) => {
+    // On your turn, the weapon, health and items open the weapons & items menu.
+    const clickable = !!local && !local.fired;
+    if (clickable) {
+      const lit = new Set();
+      if (view.hud?.hover) lit.add(view.hud.hover);
+      if (view.hud?.open) lit.add('weapon');
+      for (const zone of lit) {
+        const [x0, x1] = HUD_ZONES[zone];
+        ctx.fillStyle = 'rgba(255,255,255,0.08)';
+        ctx.strokeStyle = 'rgba(255,211,106,0.55)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.roundRect(x0 + 0.5, 4.5, x1 - x0 - 1, HUD_HEIGHT - 9, 8);
+        ctx.fill();
+        ctx.stroke();
+      }
+    }
+
+    const label = (text, x, menu = false) => {
       ctx.font = `700 10px ${FONT}`;
       ctx.fillStyle = 'rgba(190,205,230,0.7)';
       ctx.textAlign = 'left';
       ctx.fillText(text, x, 19);
+      if (!menu || !clickable) return;
+      // A little ▾ says "click me".
+      const cx = x + ctx.measureText(text).width + 8;
+      ctx.fillStyle = '#ffd36a';
+      ctx.beginPath();
+      ctx.moveTo(cx - 4, 12);
+      ctx.lineTo(cx + 4, 12);
+      ctx.lineTo(cx, 17);
+      ctx.closePath();
+      ctx.fill();
     };
     const value = (text, x, color = '#ffffff', size = 19) => {
       ctx.font = `700 ${size}px ${FONT}`;
@@ -882,7 +1033,7 @@ export class Renderer {
     ctx.fillText(`${Math.round(power)}`, barX + barW, 19);
 
     // Weapon.
-    label('WEAPON', 604);
+    label('WEAPON', 604, true);
     const ammo = weapon.id === FREE_WEAPON ? '∞' : `×${tank.stock[weapon.id] ?? 0}`;
     value(weapon.name, 604, '#ffffff', 17);
     ctx.font = `700 13px ${FONT}`;
@@ -903,16 +1054,35 @@ export class Renderer {
     label('CASH', 1064);
     value(formatMoney(tank.money), 1064, '#8dff9a', 18);
 
-    // Fuel and items, small.
+    // Items, in two short lines.
+    label('ITEMS', 1158, true);
+    const st = tank.stock;
+    const shields = st.shield + st.heavyshield;
+    const lines = [
+      [shields && `Shield ${shields}`, st.battery && `Batt ${st.battery}`],
+      [st.parachute && `Chute ${st.parachute}`, st.fuel && `Fuel ${st.fuel}`],
+    ].map((bits) => bits.filter(Boolean).join(' · ')).filter(Boolean);
     ctx.font = `600 11px ${FONT}`;
-    ctx.textAlign = 'right';
-    ctx.fillStyle = 'rgba(190,205,230,0.8)';
-    const bits = [];
-    if (tank.stock.fuel > 0) bits.push(`Fuel ${tank.stock.fuel}`);
-    if (tank.stock.parachute > 0) bits.push(`Chutes ${tank.stock.parachute}`);
-    if (tank.stock.shield + tank.stock.heavyshield > 0) bits.push(`Shields ${tank.stock.shield + tank.stock.heavyshield}`);
-    if (tank.stock.battery > 0) bits.push(`Batt ${tank.stock.battery}`);
-    ctx.fillText(bits.join(' · '), WIDTH - 12, 19);
+    ctx.textAlign = 'left';
+    ctx.fillStyle = lines.length ? 'rgba(228,235,248,0.92)' : 'rgba(190,205,230,0.5)';
+    if (!lines.length) lines.push('None');
+    lines.forEach((text, i) => ctx.fillText(text, 1158, (lines.length === 1 ? 38 : 34) + i * 15, WIDTH - 1158 - 6));
+
+    // Sudden death: a countdown for the last few rounds of turns, then a warning.
+    const sd = suddenDeathIn(s);
+    if (sd !== null && sd <= 3) {
+      const text = sd === 0 ? 'SUDDEN DEATH' : `Sudden death in ${sd} ${sd === 1 ? 'turn' : 'turns'}`;
+      ctx.font = `800 12px ${FONT}`;
+      const w = ctx.measureText(text).width + 24;
+      const y = HUD_HEIGHT + 6;
+      ctx.fillStyle = sd === 0 ? 'rgba(196,34,24,0.88)' : 'rgba(110,64,10,0.82)';
+      ctx.beginPath();
+      ctx.roundRect(WIDTH / 2 - w / 2, y, w, 21, 10.5);
+      ctx.fill();
+      ctx.fillStyle = sd === 0 ? '#ffe8dc' : '#ffd36a';
+      ctx.textAlign = 'center';
+      ctx.fillText(text, WIDTH / 2, y + 15);
+    }
   }
 
   drawWind(ctx, x, y, wind, max) {

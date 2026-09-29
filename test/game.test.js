@@ -1,11 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
-import { Game, Phase } from '../src/core/game.js';
+import { Game, Phase, driveProblem, freeDriveZone, suddenDeathIn } from '../src/core/game.js';
 import { hashGame } from '../src/core/hash.js';
 import { loadSnapshot, makeSnapshot } from '../src/core/snapshot.js';
 import { HIT_LOST, HIT_TANK, HIT_TERRAIN, HIT_WALL, launchVector, traceShot, barrelTip } from '../src/core/physics.js';
-import { HEIGHT, MAX_POWER, TANK, WIDTH, DEATH_BLAST } from '../src/core/constants.js';
+import { FREE_DRIVE, HEIGHT, MAX_POWER, TANK, WIDTH, DEATH_BLAST } from '../src/core/constants.js';
 import { AIR } from '../src/core/terrain.js';
 import { planRound } from '../src/core/terrainGen.js';
 import { Rng } from '../src/core/rng.js';
@@ -20,6 +20,24 @@ function runWorld(game) {
   s.quietNeeded = 1;
   game.settle();
   return game.drainEvents();
+}
+
+/** Drives the active tank one move command in `dir` and lets it finish. */
+function drive(game, dir, playerId = game.state.active) {
+  const result = game.apply({ type: 'move', turnId: game.state.turnId, playerId, dir });
+  if (result.ok) game.settle();
+  return result;
+}
+
+/** Plays `count` harmless turns (a tracer straight up) and returns everything that happened. */
+function passTurns(game, count) {
+  const events = [];
+  for (let i = 0; i < count && game.phase === Phase.AIM; i++) {
+    const s = game.state;
+    s.tanks[s.active].stock.tracer = 50;
+    events.push(...fireAndSettle(game, { angle: 90, power: 150, weaponId: 'tracer', playerId: s.active, seed: 100 + s.turnId }));
+  }
+  return events;
 }
 
 /** Binary-searches the power that lands a shot at `targetX` on flat ground. */
@@ -397,26 +415,150 @@ test('the core never uses non-deterministic or engine-dependent APIs', () => {
   }
 });
 
-test('driving uses fuel, climbs gentle slopes and stops at cliffs', () => {
+test('every tank can drive two tank lengths either way each turn without fuel', () => {
+  const game = flatGame({ xs: [400, 900], settings: { wind: 'off', suddenDeath: 0 } });
+  const s = game.state;
+  const tank = s.tanks[0];
+  for (const t of s.tanks) t.stock.tracer = 10;
+  assert.equal(FREE_DRIVE, 4 * TANK.halfWidth, 'two tank lengths');
+  assert.equal(tank.stock.fuel, 0);
+  let result;
+  while ((result = drive(game, 1)).ok);
+  assert.equal(tank.x, 400 + FREE_DRIVE, 'drove right to the end of the free zone');
+  assert.match(result.error, /fuel/, 'then says fuel would take it further');
+  assert.equal(driveProblem(tank, 1), result.error, 'the UI can ask the same question first');
+  assert.equal(game.phase, Phase.AIM, 'driving does not end the turn');
+  while (drive(game, -1).ok);
+  assert.equal(tank.x, 400 - FREE_DRIVE, 'and back past the start, just as far the other way');
+  assert.deepEqual(freeDriveZone(tank), [400 - FREE_DRIVE, 400 + FREE_DRIVE]);
+  assert.equal(tank.stock.fuel, 0);
+  // Next turn the zone is centred wherever the tank is then.
+  fireAndSettle(game, { angle: 90, power: 150, weaponId: 'tracer' });
+  fireAndSettle(game, { angle: 90, power: 150, weaponId: 'tracer', playerId: 1 });
+  assert.equal(s.active, 0);
+  assert.deepEqual(freeDriveZone(tank), [400 - 2 * FREE_DRIVE, 400]);
+  // A drive that runs into the end of the zone stops there and says why.
+  for (let i = 0; i < 5; i++) drive(game, 1);
+  assert.equal(tank.x, 400 - FREE_DRIVE + 50);
+  game.apply({ type: 'move', turnId: s.turnId, playerId: 0, dir: 1 });
+  game.settle();
+  assert.equal(tank.x, 400);
+  assert.ok(game.drainEvents().some((e) => e.type === 'blocked' && e.reason === 'range'));
+});
+
+test('beyond the free zone, driving takes fuel, climbs gentle slopes and stops at cliffs', () => {
   const heights = new Int16Array(WIDTH).fill(500);
   for (let x = 700; x < WIDTH; x++) heights[x] = 500 - Math.min(20, Math.floor((x - 700) / 2));
   for (let x = 1000; x < WIDTH; x++) heights[x] = 300;
   const game = flatGame({ xs: [650, 200], heights, settings: { wind: 'off' } });
   const tank = game.state.tanks[0];
-  assert.equal(game.apply({ type: 'move', turnId: 1, playerId: 0, dir: 1 }).error, 'no fuel');
+  while (drive(game, 1).ok);
+  assert.equal(tank.x, 650 + FREE_DRIVE, 'free up to the end of the zone, uphill or not');
   tank.stock.fuel = 400;
-  let moves = 0;
-  while (game.phase === Phase.AIM && tank.stock.fuel > 0 && moves < 60) {
-    if (!game.apply({ type: 'move', turnId: game.state.turnId, playerId: 0, dir: 1 }).ok) break;
-    game.settle();
-    moves++;
-    if (tank.x >= 990) break;
-  }
+  for (let moves = 0; moves < 60 && tank.x < 990; moves++) if (!drive(game, 1).ok) break;
   assert.ok(tank.x > 760, `drove up the slope to ${tank.x}`);
-  assert.ok(tank.y < 500, 'climbed');
-  assert.ok(tank.stock.fuel < 400);
+  assert.ok(tank.y < 490, 'climbed');
+  const beyond = tank.x - (650 + FREE_DRIVE);
+  const used = 400 - tank.stock.fuel;
+  assert.ok(used > beyond, `fuel paid for ${beyond} px beyond the zone plus the climbing (${used})`);
   assert.ok(tank.x < 1000 - TANK.foot, 'the cliff stopped it');
   assert.equal(game.state.active, 0, 'driving does not end the turn');
+});
+
+test('turns are counted in rounds, where every surviving tank gets one', () => {
+  const game = flatGame({ xs: [200, 640, 1080], settings: { wind: 'off' }, first: 1 });
+  const s = game.state;
+  assert.equal(s.rotation, 1);
+  passTurns(game, 2); // tanks 1 and 2
+  assert.equal(s.rotation, 1, 'tank 0 has not had its turn yet');
+  passTurns(game, 1); // tank 0
+  assert.equal(s.active, 1);
+  assert.equal(s.rotation, 2);
+  s.tanks[2].health = 1;
+  game.damageTank(s.tanks[2], 5, 0);
+  runWorld(game);
+  passTurns(game, 2); // tanks 1 and 0; tank 2 is gone
+  assert.equal(s.rotation, 3, 'a dead tank does not hold up the next round of turns');
+});
+
+test('sudden death: shells rain from the sky after every turn, more each round of turns', () => {
+  const game = flatGame({ xs: [300, 900], settings: { wind: 'off' } });
+  const s = game.state;
+  s.settings.suddenDeath = 2; // quicker than any of the menu's choices
+  for (const t of s.tanks) {
+    t.money = 1000;
+    t.shield = 100000; // keep everyone alive while we count the shells
+  }
+  assert.equal(suddenDeathIn(s), 2);
+  let events = passTurns(game, 3);
+  assert.ok(!events.some((e) => e.type === 'skyVolley' || e.type === 'suddenDeath'));
+  assert.equal(suddenDeathIn(s), 1);
+  events = passTurns(game, 1);
+  assert.equal(suddenDeathIn(s), 0);
+  assert.ok(events.some((e) => e.type === 'suddenDeath'), 'announced as the third round of turns begins');
+  assert.ok(!events.some((e) => e.type === 'skyVolley'), 'but nothing has fallen yet');
+
+  // The first turn of sudden death ends with one shell from the sky, owned by nobody.
+  fire(game, { angle: 90, power: 150, weaponId: 'tracer', playerId: s.active, seed: 9 });
+  s.tanks[s.active].stock.tracer = 50;
+  let volley = null;
+  for (let i = 0; i < 2000 && !volley; i++) {
+    game.tick();
+    volley = game.drainEvents().find((e) => e.type === 'skyVolley');
+  }
+  assert.equal(volley?.count, 1);
+  assert.equal(s.projectiles.length, 1);
+  const [shell] = s.projectiles;
+  assert.equal(shell.owner, -1);
+  assert.equal(shell.sky, true);
+  assert.ok(shell.y < 0, 'it starts above the screen');
+  game.settle();
+  assert.equal(s.lastShot.impact.x, s.tanks[0].x, 'the shell from the sky does not count as the tank’s own impact');
+
+  const counts = [];
+  for (let i = 0; i < 7; i++) counts.push(...passTurns(game, 1).filter((e) => e.type === 'skyVolley').map((e) => e.count));
+  assert.deepEqual(counts, [1, 2, 2, 3, 3, 4, 4], 'more shells every round of turns');
+  assert.ok(s.tanks.every((t) => t.money === 1000), 'nobody is paid for damage from the sky');
+});
+
+test('sudden death ends a stalemate with the last tank standing', () => {
+  const play = () => {
+    const game = flatGame({ xs: [300, 900], settings: { wind: 'medium' }, seed: 77 });
+    game.state.settings.suddenDeath = 2;
+    const events = passTurns(game, 60);
+    return { game, events };
+  };
+  const { game, events } = play();
+  const s = game.state;
+  assert.equal(s.phase, Phase.ROUND_OVER);
+  assert.equal(s.results.timeUp, false, 'decided before time was called');
+  assert.ok(s.results.winner >= 0);
+  assert.ok(events.some((e) => e.type === 'death' && e.killer === -1), 'a shell from the sky finished a tank off');
+  assert.equal(hashGame(play().game), hashGame(game), 'the same game always rains the same way');
+});
+
+test('with sudden death off, nothing falls and time is called as before', () => {
+  const game = flatGame({ xs: [300, 900], settings: { wind: 'off', suddenDeath: 0 } });
+  const events = passTurns(game, game.turnLimit() + 5);
+  assert.equal(suddenDeathIn(game.state), null);
+  assert.ok(!events.some((e) => e.type === 'skyVolley' || e.type === 'suddenDeath'));
+  assert.equal(game.state.phase, Phase.ROUND_OVER);
+  assert.equal(game.state.results.timeUp, true);
+});
+
+test('snapshots keep the free drive zone and the sudden-death count', async () => {
+  const game = flatGame({ xs: [300, 900], settings: { wind: 'off', suddenDeath: 8 } });
+  for (const t of game.state.tanks) t.shield = 100000;
+  passTurns(game, 17);
+  assert.equal(game.state.volleyTurn, game.state.turnId - 1, 'sudden death is under way');
+  drive(game, 1);
+  const copy = await loadSnapshot(JSON.parse(JSON.stringify(await makeSnapshot(game))));
+  assert.equal(hashGame(copy), hashGame(game));
+  for (const key of ['rotation', 'turnMask', 'volleyTurn']) assert.equal(copy.state[key], game.state[key], key);
+  assert.equal(copy.state.tanks[game.state.active].driveFrom, game.state.tanks[game.state.active].driveFrom);
+  passTurns(game, 3);
+  passTurns(copy, 3);
+  assert.equal(hashGame(copy), hashGame(game), 'and both carry on identically, volleys and all');
 });
 
 test('a round that drags on ends on time and the healthiest tank wins', () => {

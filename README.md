@@ -1,6 +1,6 @@
 # Scorched Tanks
 
-A turn-based artillery tank game for the browser, in the spirit of the 1991 DOS classic *Scorched Earth*. Two to six tanks take turns lobbing shells across hills that blow apart, while the wind pushes every shot around. Loose dirt slides into craters, and tanks tumble in after it. Between rounds you spend your winnings on nukes, MIRVs, napalm, rollers, shields and parachutes.
+A turn-based artillery tank game for the browser, in the spirit of the 1991 DOS classic *Scorched Earth*. Two to six tanks take turns lobbing shells across hills that blow apart, while the wind pushes every shot around. Loose dirt slides into craters, and tanks tumble in after it. Every turn you can scoot a couple of tank lengths to throw off whoever has you zeroed in, and if a battle drags on, sudden death rains shells from the sky. Between rounds you spend your winnings on nukes, MIRVs, napalm, rollers, shields and parachutes.
 
 You can play hot-seat on one keyboard, against AI tanks with four personalities, or online with up to three friends using a short room code.
 
@@ -17,16 +17,23 @@ npm start
 
 Then open http://localhost:8080. The game uses ES modules, which browsers only load over HTTP, so opening `index.html` straight from disk won't work. Any static file server works for local and peer-to-peer online play. `npm start` also runs the optional relay server for online play (see below). Set `PORT` to use a different port.
 
-**How to play.** On your turn, set the barrel's angle and the shot's power, pick a weapon and fire. Watch the wind gauge in the top bar. The last tank standing wins the round. Hits, kills and survival earn money for the shop between rounds. Every tank can always fire at full power, however damaged it is. If a round drags on past 25 turns per tank, time is called and the healthiest tank wins.
+**How to play.** On your turn, set the barrel's angle and the shot's power, pick a weapon and fire. Watch the wind gauge in the top bar. The last tank standing wins the round. Hits, kills and survival earn money for the shop between rounds. Every tank can always fire at full power, however damaged it is.
+
+**Weapons & items menu.** On your turn, click the weapon (or your health or items) in the top bar, or press I, to open a menu of everything you own: pick any weapon, raise a shield, use a battery, or drive. On a touch screen, tap the weapon's name above the Fire button.
+
+**Driving.** Every tank can drive up to two tank lengths either way from where it started its turn, for free, so a rival who has you zeroed in has to adjust. Small flags on the ground mark how far you can go. Fuel from the shop takes you further, and steep slopes stop you either way. Driving doesn't use up your turn. The AI does it too: after a close call it often scoots out of the way before shooting back.
+
+**Sudden death.** Once every tank has had 12 turns in a round (you can change this or switch it off in the settings), sudden death starts: after every turn, shells fall from the sky near random survivors, more of them each time around, and baby nukes after a while. They belong to nobody, so they earn nobody money. A countdown under the top bar warns you three turns ahead. If a round still isn't over after 25 turns per tank, time is called and the healthiest tank wins.
 
 | Action | Keyboard | Mouse / touch |
 | --- | --- | --- |
 | Turn the barrel | ← / → (hold to speed up, Shift for fine steps) | Drag from your tank: the direction sets the angle |
 | Power | ↑ / ↓ (hold to speed up, Shift for fine steps) | Drag distance sets power, or the − / + buttons |
 | Fire | Space or Enter | **FIRE** button |
-| Change weapon | Tab / Shift+Tab, or [ and ] | ‹ › buttons |
-| Drive (needs fuel) | A / D | ◀ ▶ buttons |
-| Raise a shield / use a battery | S / B | Shield / Battery buttons |
+| Change weapon | Tab / Shift+Tab, or [ and ] | Click the weapon in the top bar, or the ‹ › buttons |
+| Weapons & items menu | I | Click the weapon, health or items in the top bar; tap the weapon name |
+| Drive (two tank lengths free each turn) | A / D | Drive ◀ ▶ in the menu, or the ◀ ▶ touch buttons |
+| Raise a shield / use a battery | S / B | Weapons & items menu, or the Shield / Battery buttons |
 | Chat (online) | T | |
 | Mute | M | Menu → Sound |
 | Menu / pause | Esc | ☰ button |
@@ -64,16 +71,16 @@ Blast damage is full at the center and falls to 30% at the edge. Destroyed tanks
 | Item | Price | What it does |
 | --- | --- | --- |
 | Parachute | $1,500 for 2 | Opens by itself when you fall too far, so the landing doesn't hurt. |
-| Shield | $3,500 for 1 | Absorbs 60 damage. Goes up automatically at the start of a round, or press S. |
+| Shield | $3,500 for 1 | Absorbs 60 damage. Goes up automatically at the start of a round, or press S (or use the menu). |
 | Heavy Shield | $8,000 for 1 | Absorbs 150 damage. Same rules as the Shield. |
-| Battery | $2,500 for 2 | Restores 25 health. Press B. |
-| Fuel | $1,500 for 150 units | Drive with A and D, one unit per pixel. Climbing costs extra, and steep slopes stop you. |
+| Battery | $2,500 for 2 | Restores 25 health. Press B (or use the menu). |
+| Fuel | $1,500 for 150 units | Drive past the free two tank lengths a turn, one unit per pixel. Climbing costs extra, and steep slopes stop you. |
 
 **Money.** You earn $30 per point of damage to others and $2,500 per kill. At the end of a round everyone gets $1,500, plus $750 for every tank they outlived, and the winner gets another $5,000. Hurting yourself costs $25 per point. Selling returns 60% of the price. Inventory and money carry over to the next round.
 
-**Settings** (saved in your browser): rounds, starting cash, wind strength and whether it shifts each turn, gravity, walls (open, wrap-around, rubber, concrete or random), terrain style (rolling hills, mountains, canyons, mostly flat or random), sky (day, sunset, night, storm or random), turn timer, talking tanks and sound volume.
+**Settings** (saved in your browser): rounds, starting cash, wind strength and whether it shifts each turn, gravity, walls (open, wrap-around, rubber, concrete or random), terrain style (rolling hills, mountains, canyons, mostly flat or random), sky (day, sunset, night, storm or random), turn timer, sudden death (after 8, 12, 16 or 20 turns each, or off), talking tanks and sound volume.
 
-**AI opponents.** Every AI plans by firing trial shells through the real physics, then adds mistakes that fit its personality. All but the Rookie get a bit more accurate with each shot at the same target, but none becomes a perfect shot. Against a tank that doesn't move, the share of baby missiles that do damage is roughly:
+**AI opponents.** Every AI plans by firing trial shells through the real physics, then adds mistakes that fit its personality. All but the Rookie get a bit more accurate with each shot at the same target, but none becomes a perfect shot, and once the target drives somewhere else, it has to walk its shots in all over again. Against a tank that doesn't move, the share of baby missiles that do damage is roughly (a target that drives two tank lengths every turn about halves these):
 
 - **Rookie** (about 15%): sloppy aim and random weapons. It shoots at whoever is closest, mostly.
 - **Gunner** (about 40% in calm air, 10% in wind): aims well for gravity but ignores the wind. It's dangerous on calm days and lost in a gale.
@@ -81,7 +88,7 @@ Blast damage is full at the center and falls to 30% at the edge. Destroyed tanks
 - **Cyborg** (about 35%, rising to 45%): reads the wind exactly and picks the strongest weapon that won't hurt itself, so its near misses often still do damage. It holds grudges: it hits back at whoever last hit it.
 - **Random:** one of the above, picked at the start of the game.
 
-AIs also shop, raise shields, use batteries, drive closer when they can't reach, and use a Riot Charge when they're buried.
+AIs also shop, raise shields, use batteries, drive closer when they can't reach, dodge after a close call (the Cyborg almost always, the Rookie rarely, and never off a cliff), and use a Riot Charge when they're buried.
 
 ## Play online
 
@@ -153,7 +160,7 @@ Online play works from Pages through PeerJS. Pages can't run the relay, so for p
 | `src/render/effects.js`, `bubbles.js` | Particles, shockwaves, shake and flashes; speech bubbles |
 | `src/audio.js` | Synthesized sound effects |
 | `src/quips.js` | What talking tanks say |
-| `src/ui/*.js` | Menus, lobby, shop, settings, chat, touch controls (DOM, text only, never `innerHTML`) |
+| `src/ui/*.js` | Menus, lobby, shop, the weapons & items menu (`arsenal.js`), settings, chat, touch controls (DOM, text only, never `innerHTML`) |
 | `src/input.js` | Keyboard input with held-key acceleration |
 | `src/storage.js` | Settings and preferences in `localStorage` |
 | `src/main.js` | Wires everything together and runs the game loop and the title-screen demo battle |
@@ -181,9 +188,9 @@ npm test          # unit and integration tests (Node's built-in runner)
 npm run test:e2e  # browser tests with Playwright (installs Chromium if needed)
 ```
 
-`npm test` covers the PRNG, terrain carving and settling, collisions and sub-stepping, walls, blast falloff, falling and parachutes, every weapon's key behavior, shields, the economy and shop rules, the AI (including hitting a target within a few shots with no wind, missing often enough that even the Cyborg isn't a perfect shot, and staying within its time budget), snapshot and hash round-trips, rejection of bad protocol messages, version-mismatch handling, and the packaged Pages site. It also runs full AI-driven online games over the loopback transport, with a host and one or two guests, and checks that every guest's state hash matches the host's after every shot. The relay is tested with real WebSocket clients, including a complete game.
+`npm test` covers the PRNG, terrain carving and settling, collisions and sub-stepping, walls, blast falloff, falling and parachutes, free driving and fuel, sudden death, every weapon's key behavior, shields, the economy and shop rules, the AI (including hitting a target within a few shots with no wind, missing often enough that even the Cyborg isn't a perfect shot, dodging, losing its walked-in aim when the target moves, and staying within its time budget), snapshot and hash round-trips, rejection of bad protocol messages, version-mismatch handling, and the packaged Pages site. It also runs full AI-driven online games over the loopback transport, with a host and one or two guests, and checks that every guest's state hash matches the host's after every shot. The relay is tested with real WebSocket clients, including a complete game.
 
-`npm run test:e2e` plays in real Chromium: the title demo and help screen, a local game against the AI with zero console errors, the phone layout's touch controls, and online games between two browser contexts. The online tests cover a page served by the relay, and the game on a GitHub Pages stand-in (the site packaged exactly as the Pages workflow does it, served under a subpath). From that stand-in they play once through a relay hosted elsewhere and once over PeerJS, and check that an out-of-date copy offers to reload before joining. The PeerJS test is skipped if the public PeerJS server can't be reached. Screenshots land in `test-results/e2e/`.
+`npm run test:e2e` plays in real Chromium: the title demo and help screen, a local game against the AI with zero console errors, the weapons & items menu and free driving, sudden death, the phone layout's touch controls, and online games between two browser contexts. The online tests cover a page served by the relay, and the game on a GitHub Pages stand-in (the site packaged exactly as the Pages workflow does it, served under a subpath). From that stand-in they play once through a relay hosted elsewhere and once over PeerJS, and check that an out-of-date copy offers to reload before joining. The PeerJS test is skipped if the public PeerJS server can't be reached. Screenshots land in `test-results/e2e/`.
 
 The page exposes a small debug hook for tests and tinkering: `window.__scorched.phase`, `.hash`, `.turnId`, `.round`, `.seq` and `.session`. Press F3 in a game to show frame rate and simulation info.
 

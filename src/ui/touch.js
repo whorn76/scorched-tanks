@@ -1,5 +1,6 @@
 // On-screen controls for touch screens: angle and power buttons (hold to repeat, speeding up),
-// weapon picker, drive, items, a big Fire button and a menu button.
+// weapon picker (tap the weapon's name for the weapons & items menu), drive, items, a big Fire
+// button and a menu button.
 import { h } from './dom.js';
 
 const REPEAT_DELAY = 0.28;
@@ -50,7 +51,11 @@ export class TouchControls {
       el.addEventListener('lostpointercapture', stop);
       return el;
     };
-    this.weaponLabel = h('span', { class: 'touch-weapon' });
+    this.weaponLabel = h('button', { class: 'touch-weapon', 'aria-label': 'Weapons and items', dataset: { arsenalToggle: '' } });
+    this.weaponLabel.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      handlers.arsenal();
+    });
     this.aimGroup = h('div', { class: 'touch-bar' },
       h('div', { class: 'touch-cluster left' },
         h('div', { class: 'touch-group' }, h('span', { class: 'touch-label', text: 'Angle' }), hold('angle', 1, '⟲'), hold('angle', -1, '⟳')),

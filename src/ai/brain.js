@@ -2,18 +2,42 @@
 // through the same intents as a human: aim previews while the barrel swings, then `fire`.
 // Each personality picks targets, weapons and purchases its own way. Planning is split across
 // frames with a small time budget so it never stalls rendering.
-import { MAX_POWER } from '../core/constants.js';
-import { Phase } from '../core/game.js';
+import { FALL, HEIGHT, MAX_POWER, MOVE_STEP, TANK, WIDTH } from '../core/constants.js';
+import { Phase, driveProblem, freeDriveAt } from '../core/game.js';
 import { Rng } from '../core/rng.js';
 import { buyProblem } from '../core/economy.js';
 import { FREE_WEAPON, ITEMS, WEAPONS, WEAPON_BY_ID, productById } from '../core/weapons.js';
 import { fitWind, inValley, isBuried, searchAim } from './aim.js';
-import { PERSONALITIES, SOLID, SPOTTER, STRONGEST, aimErrorScale } from './personality.js';
+import { DODGE_RANGE, PERSONALITIES, SOLID, SPOTTER, STRONGEST, TARGET_MOVED, aimErrorScale } from './personality.js';
 
 const defaultNow = () => (globalThis.performance ? performance.now() : Date.now());
 const MAX_PURCHASES = 14;
 
 const blastOf = (weapon) => weapon.radius ?? (weapon.kind === 'napalm' ? 60 : 20);
+
+/**
+ * How far (px) the tank can drive in `dir` for free this turn without climbing anything too
+ * steep or dropping far enough to get hurt. Follows the same rules as the core's driving.
+ */
+export function freeRoom(game, tank, dir) {
+  let x = tank.x;
+  let y = tank.y;
+  let room = 0;
+  for (;;) {
+    const nx = x + dir;
+    if (!freeDriveAt(tank, nx) || nx < TANK.halfWidth || nx > WIDTH - 1 - TANK.halfWidth) break;
+    const top = y - TANK.maxClimb - 1;
+    const ground = game.footGround(nx, top, y + TANK.maxClimb);
+    if (ground !== -1 && ground <= top) break; // too steep
+    let landing = ground === -1 ? game.footGround(nx, y, HEIGHT) : ground;
+    if (landing === -1) landing = HEIGHT;
+    if (landing - y > FALL.safeDistance) break; // a drop that would hurt
+    x = nx;
+    y = landing;
+    room++;
+  }
+  return room;
+}
 
 export class Brain {
   constructor(session, { seed = 1, now = defaultNow, budgetMs = 3, fast = false, acts = (tank) => !!tank.ai } = {}) {
@@ -74,16 +98,31 @@ export class Brain {
       this.stage = 'idle';
       return;
     }
+    // A drive sent to an online host hasn't been applied yet: wait for it (but not forever).
+    if (this.waitMove) {
+      if (this.session.seq === this.waitMove.seq && this.session.ticks < this.waitMove.until) return;
+      this.waitMove = null;
+    }
     if (this.turnId !== s.turnId || this.stage === 'idle') this.beginTurn(game, tank);
     if (this.stage === 'think') this.think(game, tank);
     if (this.stage === 'swing') this.swing(game, tank);
   }
 
-  /** Learns from where its own last shell landed (the Spotter's wind estimate). */
+  /**
+   * Learns from where shells landed: enemy shells that came close are something to dodge on
+   * the next turn, and its own shells tell the Spotter about the wind.
+   */
   observe(game) {
     const s = game.state;
     const shot = s.lastShot;
     if (!shot || !shot.impact || s.phase === Phase.BUSY) return;
+    if (this.threatTurn !== shot.turnId) {
+      this.threatTurn = shot.turnId;
+      for (const t of s.tanks) {
+        if (!t.alive || t.id === shot.playerId || !this.acts(t)) continue;
+        if (shot.impact.tank === t.id || Math.abs(shot.impact.x - t.x) <= DODGE_RANGE) this.mem(t).threat = { round: s.round, x: shot.impact.x };
+      }
+    }
     const tank = s.tanks[shot.playerId];
     if (!tank || !this.acts(tank)) return;
     const m = this.mem(tank);
@@ -167,10 +206,14 @@ export class Brain {
       m.round = s.round;
       m.targetId = -1;
       m.shotsAtTarget = 0;
+      m.aimedFrom = null;
     }
-    const sameTurn = this.turnId === s.turnId; // back after driving closer
+    const sameTurn = this.turnId === s.turnId; // back after driving
     this.turnId = s.turnId;
-    if (!sameTurn) this.drives = 0;
+    if (!sameTurn) {
+      this.drives = 0;
+      this.dodge = this.planDodge(game, tank, p, m);
+    }
     this.plan = null;
     this.job = null;
     this.retargeted = false;
@@ -182,11 +225,38 @@ export class Brain {
       const shield = tank.stock.heavyshield > 0 ? 'heavyshield' : tank.stock.shield > 0 ? 'shield' : null;
       if (shield) this.session.submit({ type: 'use', turnId: s.turnId, playerId: tank.id, item: shield });
     }
+    // Zeroed in on? Scoot out of the way with the free drive before shooting back.
+    if (this.dodge?.moves > 0 && freeRoom(game, tank, this.dodge.dir) >= MOVE_STEP) {
+      this.dodge.moves--;
+      this.drive(game, tank, this.dodge.dir);
+      return;
+    }
+    const dodged = !!this.dodge;
+    this.dodge = null;
     const target = this.chooseTarget(game, tank, p);
     this.startPlan(game, tank, target);
     this.startTick = this.session.ticks;
-    this.thinkTicks = this.fast ? 0 : sameTurn ? 4 : p.think[0] + this.rng.int(p.think[1] - p.think[0] + 1);
+    this.thinkTicks = this.fast ? 0 : sameTurn && !dodged ? 4 : p.think[0] + this.rng.int(p.think[1] - p.think[0] + 1);
     this.stage = 'think';
+  }
+
+  /**
+   * Whether to dodge this turn: after an enemy shell landed close, by personality, driving
+   * away from where it landed (or the other way if that's blocked). Returns { dir, moves } or
+   * null.
+   */
+  planDodge(game, tank, p, m) {
+    const threat = m.threat;
+    m.threat = null;
+    if (threat?.round !== game.state.round || !this.rng.chance(p.dodge ?? 0) || isBuried(game.terrain, tank)) return null;
+    const away = Math.sign(tank.x - threat.x) || (this.rng.chance(0.5) ? 1 : -1);
+    for (const dir of [away, -away]) {
+      const room = freeRoom(game, tank, dir);
+      if (room < 2 * MOVE_STEP) continue;
+      const distance = room * (0.6 + this.rng.float() * 0.4);
+      return { dir, moves: Math.max(2, Math.floor(distance / MOVE_STEP)) };
+    }
+    return null;
   }
 
   startPlan(game, tank, target) {
@@ -194,6 +264,9 @@ export class Brain {
     const m = this.mem(tank);
     if (target && target.id !== m.targetId) {
       m.targetId = target.id;
+      m.shotsAtTarget = 0;
+    } else if (target && m.aimedFrom && Math.abs(target.x - m.aimedFrom.targetX) >= TARGET_MOVED) {
+      // The target has moved since the last shot, so the shots have to be walked in again.
       m.shotsAtTarget = 0;
     }
     const buried = isBuried(game.terrain, tank);
@@ -238,12 +311,12 @@ export class Brain {
     }
     if (!this.plan || this.session.ticks - this.startTick < this.thinkTicks) return;
     this.fallback = null;
-    // Out of reach (too far in high gravity, or a hill in the way)? Drive closer if we can.
-    if (this.plan.score > 140 && this.target && tank.stock.fuel > 0 && this.drives < 12 && this.weaponId !== 'riot') {
-      const dir = Math.sign(this.target.x - tank.x) || 1;
+    // Out of reach (too far in high gravity, or a hill in the way)? Drive closer if we can:
+    // for free near where the turn started, further with fuel.
+    const closer = this.target ? Math.sign(this.target.x - tank.x) || 1 : 0;
+    if (this.plan.score > 140 && this.target && !driveProblem(tank, closer) && this.drives < 12 && this.weaponId !== 'riot') {
       this.drives++;
-      this.stage = 'idle';
-      this.session.submit({ type: 'move', turnId: game.state.turnId, playerId: tank.id, dir });
+      this.drive(game, tank, closer);
       return;
     }
     const p = this.personality(tank);
@@ -261,6 +334,14 @@ export class Brain {
     this.swingTicks = this.fast ? 0 : 18 + Math.round(Math.abs(this.final.angle - tank.angle) / 4);
     this.swingTick = 0;
     this.stage = 'swing';
+  }
+
+  /** Drives one step, then plans again from wherever the tank ends up. */
+  drive(game, tank, dir) {
+    const seq = this.session.seq;
+    const result = this.session.submit({ type: 'move', turnId: game.state.turnId, playerId: tank.id, dir });
+    this.stage = 'idle';
+    if (result?.pending) this.waitMove = { seq, until: this.session.ticks + 180 };
   }
 
   swing(game, tank) {
@@ -295,6 +376,7 @@ export class Brain {
     const m = this.mem(tank);
     m.shotsAtTarget++;
     m.pending = { turnId: s.turnId, x: tank.x, y: tank.y };
+    m.aimedFrom = this.target ? { targetX: this.target.x } : null;
   }
 
   // --- Shopping ------------------------------------------------------------------------------

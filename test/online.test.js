@@ -115,6 +115,36 @@ test('host + 2 guests stay in sync through full rounds', async () => {
   assert.deepEqual(standings, room.host.game.standings().map((t) => t.id), 'everyone sees the same final standings');
 });
 
+test('sudden death, drives and dodges stay in sync online', async () => {
+  const room = makeRoom({ guests: 1, settings: { rounds: 1, wind: 'medium', suddenDeath: 8 }, seed: 31 });
+  await startRoom(room, ['cyborg']);
+  const [guest] = room.guests;
+  let skipped = false;
+  let volleys = 0;
+  let moves = 0;
+  await play(room, {
+    onFrame: () => {
+      // Skip ahead to the last round of turns before sudden death, on every copy at once: in
+      // the middle of the same shot, before either reaches the end of the turn.
+      const same = guest.game && guest.seq === room.host.seq && room.host.game.phase === Phase.BUSY && guest.game.phase === Phase.BUSY && room.host.game.state.round === 1;
+      if (!skipped && same) {
+        for (const g of [room.host.game, guest.game]) g.state.rotation = 8;
+        skipped = true;
+      }
+      for (const e of room.host.events.splice(0)) {
+        if (e.type === 'skyVolley') volleys++;
+        if (e.type === 'drive') moves++;
+      }
+      guest.events.length = 0;
+    },
+  });
+  assert.ok(skipped);
+  assert.ok(volleys >= 1, `${volleys} volleys fell from the sky`);
+  assert.ok(moves > 0, 'tanks drove');
+  assert.equal(room.host.game.phase, Phase.GAME_OVER);
+  assertInSync(room.host, room.guests);
+});
+
 test('a guest who drifts out of sync is repaired with a snapshot', async () => {
   const room = makeRoom({ guests: 1, settings: { rounds: 1 } });
   await startRoom(room, []);

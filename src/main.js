@@ -1,6 +1,6 @@
 // Wires the game together: sessions, the fixed-timestep loop, input, rendering and the menus.
 import { DEFAULT_SETTINGS, DT, MAX_POWER, TANK, TANK_COLORS, WIDTH } from './core/constants.js';
-import { Phase } from './core/game.js';
+import { Phase, driveProblem } from './core/game.js';
 import { FREE_WEAPON, WEAPONS, WEAPON_BY_ID } from './core/weapons.js';
 import { hashGame } from './core/hash.js';
 import { LocalSession } from './session/session.js';
@@ -10,7 +10,7 @@ import { normalizeRoomCode } from './net/protocol.js';
 import { detectSameOriginRelay, hostRelay, joinRelay, normalizeRelayUrl, relayUrlProblem } from './net/relayTransport.js';
 import { hostPeer, joinPeer, turnProblem } from './net/peerTransport.js';
 import { BUILD, updateAvailable } from './version.js';
-import { Renderer } from './render/renderer.js';
+import { HUD_HEIGHT, HUD_ZONES, Renderer } from './render/renderer.js';
 import { Bubbles } from './render/bubbles.js';
 import { Sound } from './audio.js';
 import { quipFor } from './quips.js';
@@ -21,6 +21,7 @@ import { Lobby, hostScreen, joinScreen, waitingScreen } from './ui/online.js';
 import { ChatBox } from './ui/chat.js';
 import { Shop } from './ui/shop.js';
 import { TouchControls } from './ui/touch.js';
+import { Arsenal } from './ui/arsenal.js';
 import { loadLineup, loadMuted, loadOnline, loadSettings, saveLineup, saveMuted, saveOnline, saveSettings } from './storage.js';
 
 const canvas = document.getElementById('game');
@@ -57,6 +58,9 @@ const app = {
   aimSentAt: 0,
   aimDirty: false,
   drag: null,
+  hudShown: false, // the top bar is on screen (during a battle)
+  hudHover: null, // the part of the top bar under the mouse
+  driveWarned: new Set(), // drive problems already explained this turn
   settings: loadSettings(),
   lineup: loadLineup() ?? defaultLineup(),
   online: loadOnline(),
@@ -74,9 +78,11 @@ const app = {
 
 const sound = new Sound({ volume: app.settings.volume, muted: app.muted });
 for (const type of ['pointerdown', 'keydown']) window.addEventListener(type, () => sound.unlock(), { capture: true });
-uiRoot.addEventListener('click', (e) => {
-  if (e.target.closest?.('button')) sound.play({ type: 'click' });
-});
+for (const root of [uiRoot, document.getElementById('arsenal')]) {
+  root.addEventListener('click', (e) => {
+    if (e.target.closest?.('button')) sound.play({ type: 'click' });
+  });
+}
 
 // --- Overlays --------------------------------------------------------------------------------
 
@@ -178,7 +184,8 @@ function gameOverlay() {
     return ['game-settings', () => screens.settingsScreen(app.settings, { personalOnly: true, onChange: settingsChanged, onClose: () => (app.modal = 'pause') }), true];
   }
   if (app.modal === 'pause') {
-    return [`pause:${app.muted}`, () => screens.pauseScreen({
+    const armed = !!app.aim && !app.aim.fired;
+    return [`pause:${app.muted}:${armed}`, () => screens.pauseScreen({
       online: session.online,
       muted: app.muted,
       onResume: closeModal,
@@ -186,6 +193,12 @@ function gameOverlay() {
       onSettings: () => (app.modal = 'settings'),
       onHelp: () => (app.modal = 'help'),
       onQuit: quitToTitle,
+      onArsenal: armed
+        ? () => {
+            closeModal();
+            openArsenal();
+          }
+        : null,
     }), true];
   }
   switch (game.phase) {
@@ -242,6 +255,7 @@ function settingsChanged(settings) {
 function closeModal() {
   app.modal = null;
   app.paused = false;
+  input.enabled = !!app.aim && !chat.isOpen; // right away, not on the next frame
 }
 
 function toggleMute() {
@@ -266,6 +280,7 @@ function startLocalGame() {
 
 function startSession(session) {
   if (app.session && app.session !== session) app.session.close();
+  closeArsenal();
   app.session = session;
   app.paused = false;
   app.modal = null;
@@ -281,6 +296,7 @@ function startSession(session) {
 
 function quitToTitle() {
   app.session?.close();
+  closeArsenal();
   app.session = null;
   app.modal = null;
   app.paused = false;
@@ -454,9 +470,24 @@ function availableWeapons(tank) {
   return WEAPONS.filter((w) => w.id === FREE_WEAPON || tank.stock[w.id] > 0).map((w) => w.id);
 }
 
+/**
+ * The tank the person at this screen is playing right now, or -1. That's while the game waits
+ * for their move, and also while their own drive is still rolling (so their aim survives
+ * driving), but not once they've fired.
+ */
+function localTurnTank(session) {
+  const s = session.state;
+  if (!s) return -1;
+  const driving = s.phase === Phase.BUSY && !s.pendingTurnEnd;
+  if (s.phase !== Phase.AIM && !driving) return -1;
+  const tank = s.tanks[s.active];
+  return tank && tank.alive && !tank.ai && session.controls(tank.id) ? tank.id : -1;
+}
+
 function syncAim() {
   const session = app.session;
-  const id = session?.game && !app.paused ? session.myTurn() : -1;
+  // The aim is kept while paused too, so pausing never resets the barrel or the weapon.
+  const id = session?.game ? localTurnTank(session) : -1;
   if (id < 0) {
     app.aim = null;
     return;
@@ -488,7 +519,8 @@ function changeAim(kind, delta) {
 
 function sendAimPreview(now) {
   const aim = app.aim;
-  if (!aim || aim.fired || !app.aimDirty || now - app.aimSentAt < 80) return;
+  // Wait until the world is at rest: the host ignores previews while a drive is rolling.
+  if (!aim || aim.fired || !app.aimDirty || now - app.aimSentAt < 80 || !app.session.game.isIdle()) return;
   app.aimDirty = false;
   app.aimSentAt = now;
   app.session.submit({ type: 'aim', playerId: aim.playerId, turnId: aim.turnId, angle: aim.angle, power: Math.round(aim.power), weaponId: aim.weaponId });
@@ -512,28 +544,55 @@ function cycleWeapon(dir) {
   app.aimDirty = true;
 }
 
-function useItem(kind) {
+/** Picks a weapon from the weapons & items menu. */
+function selectWeapon(weaponId) {
+  const aim = app.aim;
+  if (!aim || aim.fired) return;
+  const tank = app.session.state.tanks[aim.playerId];
+  if (!availableWeapons(tank).includes(weaponId)) return;
+  aim.weaponId = weaponId;
+  app.aimDirty = true;
+  closeArsenal();
+}
+
+/**
+ * Uses an item. The S key asks for 'shield' and gets the strongest one you have; the menu
+ * names the exact item ('shield', 'heavyshield' or 'battery').
+ */
+function useItem(kind, { exact = false } = {}) {
   const aim = app.aim;
   if (!aim || aim.fired || !app.session.game.isIdle()) return;
   const tank = app.session.state.tanks[aim.playerId];
   let item = kind;
-  if (kind === 'shield') item = tank.stock.heavyshield > 0 ? 'heavyshield' : 'shield';
+  if (kind === 'shield' && !exact) item = tank.stock.heavyshield > 0 ? 'heavyshield' : 'shield';
   if (!(tank.stock[item] > 0)) {
-    toast(kind === 'shield' ? 'No shields. Buy them in the shop.' : 'No batteries. Buy them in the shop.');
+    toast(kind === 'battery' ? 'No batteries. Buy them in the shop.' : 'No shields. Buy them in the shop.');
     return;
   }
   const result = app.session.submit({ type: 'use', turnId: aim.turnId, playerId: aim.playerId, item });
-  if (result && !result.ok) toast(result.error, 'error');
+  if (result && !result.ok) toast(`Can't use that: ${result.error}.`, 'error');
+}
+
+/** Explains once per turn why a drive can't go on (the free distance is used up, a cliff…). */
+function warnDrive(reason) {
+  if (app.driveWarned.has(reason)) return;
+  app.driveWarned.add(reason);
+  const text = {
+    range: 'That’s as far as you can drive this turn: two tank lengths either way. Fuel from the shop takes you further.',
+    fuel: 'Out of fuel.',
+    steep: 'Too steep to drive up.',
+    edge: 'That’s the edge of the map.',
+  }[reason];
+  if (text) toast(text);
 }
 
 function drive(now) {
   const aim = app.aim;
-  const dir = input.driving || touch.driving;
+  const dir = input.driving || touch.driving || arsenal.driving;
   if (!aim || aim.fired || !dir || !app.session.game.isIdle()) return;
   const tank = app.session.state.tanks[aim.playerId];
-  if (!(tank.stock.fuel > 0)) {
-    if (!app.noFuelWarned) toast('No fuel. Buy some in the shop to drive.');
-    app.noFuelWarned = true;
+  if (driveProblem(tank, dir)) {
+    warnDrive('range');
     return;
   }
   if (app.session.online && now - (app.lastMoveAt ?? 0) < 120) return; // one request in flight
@@ -558,15 +617,85 @@ function dragAim(event) {
   app.drag = { x: px, y: py };
 }
 
+// --- Weapons & items menu --------------------------------------------------------------------
+
+const arsenal = new Arsenal(document.getElementById('arsenal'), {
+  select: selectWeapon,
+  use: (id) => useItem(id, { exact: true }),
+  close: () => closeArsenal(),
+});
+
+/** Opens the weapons & items menu under the weapon in the top bar, if it's your turn. */
+function openArsenal() {
+  const aim = app.aim;
+  if (!aim || aim.fired) {
+    if (app.session?.game && app.hudShown) toast('You can change weapons and use items on your turn.');
+    return;
+  }
+  arsenal.show(app.session.state.tanks[aim.playerId], aim);
+  placeArsenal();
+}
+
+function closeArsenal() {
+  arsenal.hide();
+}
+
+function toggleArsenal() {
+  if (arsenal.isOpen) closeArsenal();
+  else openArsenal();
+}
+
+/** Anchors the menu just under the top bar's weapon (the bar scales with the window). */
+function placeArsenal() {
+  if (!arsenal.isOpen) return;
+  const rect = canvas.getBoundingClientRect();
+  const k = rect.width / WIDTH;
+  arsenal.place(rect.left + HUD_ZONES.weapon[0] * k, rect.top + HUD_HEIGHT * k + 6);
+}
+
+// Clicking or tapping anywhere outside the menu closes it (the battlefield handles its own).
+document.addEventListener('pointerdown', (event) => {
+  if (!arsenal.isOpen) return;
+  const target = event.target;
+  if (arsenal.root.contains(target) || target === canvas || target.closest?.('[data-arsenal-toggle]')) return;
+  closeArsenal();
+}, { capture: true });
+
 canvas.addEventListener('pointerdown', (event) => {
-  if (!app.aim || app.paused) return;
   if (event.pointerType === 'mouse' && event.button !== 0) return;
+  // With the menu open, a click on the battlefield (or on the top bar again) just closes it.
+  if (arsenal.isOpen) {
+    event.preventDefault();
+    closeArsenal();
+    return;
+  }
+  // The top bar works like a menu: its weapon, health and items open the weapons & items menu.
+  const p = renderer.toWorld(event.clientX, event.clientY);
+  if (app.hudShown && p.y < HUD_HEIGHT) {
+    event.preventDefault();
+    if (renderer.hudZoneAt(p.x, p.y)) openArsenal();
+    return;
+  }
+  if (!app.aim || app.paused) return;
   event.preventDefault();
   canvas.setPointerCapture(event.pointerId);
   dragAim(event);
 });
 canvas.addEventListener('pointermove', (event) => {
-  if (app.drag && canvas.hasPointerCapture(event.pointerId)) dragAim(event);
+  if (app.drag && canvas.hasPointerCapture(event.pointerId)) {
+    dragAim(event);
+    return;
+  }
+  const p = renderer.toWorld(event.clientX, event.clientY);
+  const zone = event.pointerType === 'mouse' && app.hudShown && app.aim && p.y < HUD_HEIGHT ? renderer.hudZoneAt(p.x, p.y) : null;
+  if (zone !== app.hudHover) {
+    app.hudHover = zone;
+    canvas.style.cursor = zone ? 'pointer' : '';
+  }
+});
+canvas.addEventListener('pointerleave', () => {
+  app.hudHover = null;
+  canvas.style.cursor = '';
 });
 const endDrag = () => {
   app.drag = null;
@@ -581,6 +710,7 @@ input.on('nextWeapon', () => cycleWeapon(1));
 input.on('prevWeapon', () => cycleWeapon(-1));
 input.on('shield', () => useItem('shield'));
 input.on('battery', () => useItem('battery'));
+input.on('arsenal', () => toggleArsenal());
 input.on('mute', () => toggleMute());
 input.on('debug', () => (renderer.showDebug = !renderer.showDebug));
 input.on('chat', () => {
@@ -590,7 +720,10 @@ input.on('help', () => {
   if (!app.session) go(app.screen === 'help' ? 'title' : 'help');
   else app.modal = app.modal === 'help' ? null : 'help';
 });
-input.on('pause', () => togglePause());
+input.on('pause', () => {
+  if (arsenal.isOpen) closeArsenal();
+  else togglePause();
+});
 
 function togglePause() {
   if (!app.session) {
@@ -613,10 +746,14 @@ const touch = new TouchControls(document.getElementById('touch'), {
   fire: () => fire(),
   shield: () => useItem('shield'),
   battery: () => useItem('battery'),
+  arsenal: () => toggleArsenal(),
   menu: () => togglePause(),
 });
 
-window.addEventListener('resize', () => renderer.resize());
+window.addEventListener('resize', () => {
+  renderer.resize();
+  placeArsenal();
+});
 document.addEventListener('visibilitychange', () => {
   if (document.hidden && app.session && !app.session.online && !app.modal) {
     app.modal = 'pause';
@@ -641,6 +778,11 @@ function talk(event, game) {
       bubbles.say(event.tank, quipFor('death', s.turnId, event.tank));
       if (event.killer >= 0 && event.killer !== event.tank) bubbles.say(event.killer, quipFor('kill', s.turnId, event.killer), 1.4);
       break;
+    case 'suddenDeath': {
+      const speaker = s.tanks[s.active]?.alive ? s.active : s.tanks.findIndex((t) => t.alive);
+      if (speaker >= 0) bubbles.say(speaker, quipFor('sky', s.turnId, speaker));
+      break;
+    }
     case 'round':
       bubbles.clear();
       break;
@@ -656,8 +798,14 @@ function handleEvents(session, { quiet = false } = {}) {
     if (!quiet) sound.play(event);
     switch (event.type) {
       case 'turn':
-        app.noFuelWarned = false;
+        app.driveWarned.clear();
         if (!quiet && session.controls(event.tank) && !session.game?.state.tanks[event.tank]?.ai) sound.play({ type: 'yourTurn' });
+        break;
+      case 'blocked':
+        if (!quiet && app.aim?.playerId === event.tank) warnDrive(event.reason);
+        break;
+      case 'suddenDeath':
+        if (!quiet) toast('Sudden death! Shells now fall from the sky after every turn.', 'error');
         break;
       case 'chat':
         chat.add(event);
@@ -765,13 +913,17 @@ function runFrame(now) {
     handleEvents(session);
     if (session.game) {
       syncAim();
+      // The menu belongs to the turn it was opened on.
+      if (arsenal.isOpen && (!app.aim || app.aim.fired || app.modal || app.aim.playerId !== arsenal.tankId)) closeArsenal();
       input.enabled = !!app.aim && !app.modal && !chat.isOpen;
       input.update(dt);
       touch.update(dt);
       drive(now);
       sendAimPreview(now);
+      if (arsenal.isOpen) arsenal.update({ tank: session.state.tanks[app.aim.playerId], aim: app.aim, idle: session.game.isIdle() });
     }
   }
+  if (arsenal.isOpen && !session?.game) closeArsenal();
   if (playing) {
     if (app.demo) {
       app.demo = null;
@@ -786,6 +938,8 @@ function runFrame(now) {
   touch.sync({ inGame: playing, myTurn: !!app.aim && !app.modal, weaponName: weapon?.name });
   const shown = playing ? session : app.demo;
   const battle = playing && (session.game.phase === Phase.AIM || session.game.phase === Phase.BUSY);
+  app.hudShown = battle;
+  if (!battle || !app.aim) app.hudHover = null;
   bubbles.update(dt);
   sound.update(playing ? session.game : null);
   const guide = app.drag && app.aim ? { x: app.drag.x, y: app.drag.y, angle: app.aim.angle, power: app.aim.power } : null;
@@ -796,6 +950,7 @@ function runFrame(now) {
     aim: playing ? app.aim : null,
     aimGuide: playing ? guide : null,
     hideHud: !battle,
+    hud: { hover: app.hudHover, open: arsenal.isOpen },
     dim: playing ? (app.modal ? 0.35 : 0) : 0.28,
   });
 }

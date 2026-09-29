@@ -251,6 +251,17 @@ export class Sound {
       case 'timeout':
         [0, 0.15].forEach((d) => this.tone({ type: 'square', from: 880, duration: 0.09, volume: 0.07, delay: d }));
         break;
+      case 'suddenDeath':
+        // An air-raid siren: three slow rises and falls.
+        for (let i = 0; i < 3; i++) {
+          this.tone({ type: 'sawtooth', from: 380, to: 760, duration: 0.55, volume: 0.07, delay: i * 1.05, curve: 'lin', attack: 0.08 });
+          this.tone({ type: 'sawtooth', from: 760, to: 380, duration: 0.45, volume: 0.07, delay: i * 1.05 + 0.55, curve: 'lin' });
+        }
+        break;
+      case 'skyVolley':
+        // A falling whistle: the shells are on their way down.
+        this.tone({ type: 'sine', from: 2100, to: 700, duration: 1.1, volume: 0.06, curve: 'lin', attack: 0.1 });
+        break;
       case 'round':
         this.fanfare();
         break;

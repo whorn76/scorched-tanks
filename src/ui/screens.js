@@ -121,7 +121,7 @@ export function localSetupScreen({ lineup, allowAi, onChange, onStart, onBack, o
   );
 }
 
-export function pauseScreen({ online, onResume, onHelp, onSettings, onQuit, muted, onMute }) {
+export function pauseScreen({ online, onResume, onHelp, onSettings, onQuit, muted, onMute, onArsenal = null }) {
   return h(
     'div',
     { class: 'panel narrow', id: 'pause-menu' },
@@ -129,6 +129,7 @@ export function pauseScreen({ online, onResume, onHelp, onSettings, onQuit, mute
     online ? h('p', { class: 'hint', text: 'The game keeps running for everyone else.' }) : null,
     h('div', { class: 'menu' },
       h('button', { class: 'btn primary', onclick: onResume, text: 'Resume' }),
+      onArsenal ? h('button', { class: 'btn', id: 'btn-pause-arsenal', onclick: onArsenal, text: 'Weapons & items' }) : null,
       h('button', { class: 'btn', onclick: onMute, text: muted ? 'Sound: off' : 'Sound: on' }),
       onSettings ? h('button', { class: 'btn', onclick: onSettings, text: 'Sound & talk' }) : null,
       h('button', { class: 'btn', onclick: onHelp, text: 'How to play' }),
@@ -141,7 +142,8 @@ const KEYS = [
   ['↑ / ↓', 'Power up / down'],
   ['Space / Enter', 'Fire'],
   ['Tab / Shift+Tab, [ ]', 'Next / previous weapon'],
-  ['A / D', 'Drive left / right (needs fuel)'],
+  ['I, or click the weapon', 'Weapons & items menu: pick any weapon, raise a shield, use a battery, drive'],
+  ['A / D', 'Drive left / right: two tank lengths either way are free each turn, fuel goes further'],
   ['S', 'Raise a shield'],
   ['B', 'Use a battery'],
   ['Mouse / touch drag', 'Aim: direction sets angle, distance sets power'],
@@ -158,7 +160,7 @@ export function helpScreen({ onClose }) {
     'div',
     { class: 'panel wide', id: 'help-screen' },
     h('h2', { text: 'How to Play' }),
-    h('p', { text: 'Take turns lobbing shells at the other tanks. Set your angle and power, mind the wind, and fire. Last tank standing wins the round. Hits and kills earn cash to spend in the shop between rounds.' }),
+    h('p', { text: 'Take turns lobbing shells at the other tanks. Set your angle and power, mind the wind, and fire. Every turn you can also drive up to two tank lengths either way, so a rival who has you zeroed in has to adjust. Last tank standing wins the round. Hits and kills earn cash to spend in the shop between rounds. If a round drags on, sudden death starts and shells rain from the sky after every turn.' }),
     h('div', { class: 'help-grid' },
       h('table', { class: 'keys' }, h('tbody', {}, KEYS.map(([k, v]) => h('tr', {}, h('th', { text: k }), h('td', { text: v }))))),
       h('div', { class: 'scroll' },

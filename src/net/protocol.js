@@ -6,7 +6,7 @@ import { MAX_POWER, sanitizeSettings } from '../core/constants.js';
 import { STOCK_IDS, WEAPON_IDS } from '../core/weapons.js';
 
 // Bump when the rules change, so mismatched copies of the game refuse to play together.
-export const PROTOCOL_VERSION = 2; // 2: shot power no longer depends on health
+export const PROTOCOL_VERSION = 3; // 2: shot power no longer depends on health; 3: free driving, sudden death
 export const MAX_HUMANS = 4; // host + 3 guests
 export const MAX_NAME = 16;
 export const MAX_CHAT = 200;

@@ -95,10 +95,20 @@ export const QUIPS = {
     'Cleanup on aisle five.',
     'Chalk one up for me.',
   ],
+  sky: [
+    'Is it just me, or is the sky falling?',
+    'Who ordered the air strike?',
+    'Forecast: cloudy with a chance of shells.',
+    'Everybody look up!',
+    'Well, somebody lost their patience.',
+    'I should have brought an umbrella.',
+    'Okay, now it gets serious.',
+    'Nowhere to hide now.',
+  ],
 };
 
-const KIND_SEED = { fire: 1, hit: 2, death: 3, kill: 4 };
-const CHANCE = { fire: 0.35, hit: 0.35, death: 0.9, kill: 0.4 };
+const KIND_SEED = { fire: 1, hit: 2, death: 3, kill: 4, sky: 5 };
+const CHANCE = { fire: 0.35, hit: 0.35, death: 0.9, kill: 0.4, sky: 1 };
 
 /** The line a tank says for an event, or null if it keeps quiet this time. */
 export function quipFor(kind, turnId, tankId, salt = 0) {

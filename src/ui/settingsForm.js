@@ -13,6 +13,7 @@ const LABELS = {
   terrain: 'Terrain',
   sky: 'Sky',
   turnTimer: 'Turn timer',
+  suddenDeath: 'Sudden death',
   talk: 'Talking tanks',
   volume: 'Sound volume',
 };
@@ -29,9 +30,10 @@ const VALUE_LABELS = {
   terrain: (v) => ({ hills: 'Rolling hills', mountains: 'Mountains', canyons: 'Canyons', flat: 'Mostly flat', random: 'Random' })[v],
   sky: (v) => (v === 'random' ? 'Random each round' : cap(v)),
   rounds: (v) => String(v),
+  suddenDeath: (v) => (v ? `After ${v} turns each` : 'Off'),
 };
 
-export const GAMEPLAY_KEYS = ['rounds', 'startCash', 'wind', 'windChange', 'gravity', 'walls', 'terrain', 'sky', 'turnTimer'];
+export const GAMEPLAY_KEYS = ['rounds', 'startCash', 'wind', 'windChange', 'gravity', 'walls', 'terrain', 'sky', 'turnTimer', 'suddenDeath'];
 export const PERSONAL_KEYS = ['talk', 'volume'];
 
 export function describeSetting(key, value) {

@@ -16,12 +16,21 @@ const ICON_COLORS = {
   dirt: '#a0703a',
   riot: '#ff5a4a',
   tracer: '#7fffc4',
+  // Items, by id.
+  parachute: '#f4f6fb',
+  shield: '#7fd8ff',
+  heavyshield: '#6f86ff',
+  battery: '#8dff9a',
+  fuel: '#ffb34a',
 };
 
-function icon(product) {
-  const color = ICON_COLORS[product.kind] ?? '#9fd8ff';
+/** A small colored dot for a weapon or item, the same one the shop uses. */
+export function productIcon(product) {
+  const color = ICON_COLORS[product.kind ?? product.id] ?? '#9fd8ff';
   return h('span', { class: 'shop-icon', style: { background: color } });
 }
+
+const icon = productIcon;
 
 export class Shop {
   /**

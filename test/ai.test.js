@@ -1,19 +1,21 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { LocalSession } from '../src/session/session.js';
-import { Brain } from '../src/ai/brain.js';
+import { Brain, freeRoom } from '../src/ai/brain.js';
 import { PERSONALITIES, aimErrorScale } from '../src/ai/personality.js';
 import { isBuried, searchAim, trial, scoreImpact } from '../src/ai/aim.js';
 import { Phase } from '../src/core/game.js';
-import { WIDTH, WIND_ACCEL } from '../src/core/constants.js';
-import { flatGame } from './helpers.js';
+import { FREE_DRIVE, HEIGHT, WIDTH, WIND_ACCEL } from '../src/core/constants.js';
+import { fireAndSettle, flatGame } from './helpers.js';
 
 /**
  * An AI tank (id 0) fires `shots` shots at a dummy (id 1) that can't be destroyed and only
- * fires harmless tracers straight up. Returns the AI's shots as { hit, miss }: whether each
- * did damage, and how far from the dummy it landed (at most 400 px), plus the brain.
+ * fires harmless tracers straight up. With `moving`, the dummy first uses its free drive to
+ * move two tank lengths each turn, alternating sides. Returns the AI's shots as { hit, miss }:
+ * whether each did damage, and how far from the dummy it landed (at most 400 px), plus the
+ * brain.
  */
-function duel({ level, wind = 0, windSetting = 'high', xs = [250, 1010], seed = 1, shots = 6 }) {
+function duel({ level, wind = 0, windSetting = 'high', xs = [250, 1010], seed = 1, shots = 6, moving = false }) {
   const session = new LocalSession({ settings: { startCash: 0 }, players: [{ name: 'AI', ai: level }, { name: 'Dummy' }], seed, aiFast: true });
   const game = flatGame({ xs, wind, settings: { wind: windSetting, windChange: false } });
   game.state.tanks[0].ai = level;
@@ -24,12 +26,22 @@ function duel({ level, wind = 0, windSetting = 'high', xs = [250, 1010], seed = 
   session.brain = new Brain(session, { seed, fast: true });
   const record = [];
   let before = dummy.health;
-  for (let i = 0; i < 40000 && record.length < shots; i++) {
+  let turn = -1;
+  let dir = 1;
+  for (let i = 0; i < 80000 && record.length < shots; i++) {
     const s = game.state;
     if (s.phase === Phase.AIM && s.active === 1) {
-      const impact = s.lastShot?.impact;
-      record.push({ hit: dummy.health < before, miss: impact ? Math.min(400, Math.abs(impact.x - dummy.x)) : 400 });
-      before = dummy.health;
+      if (turn !== s.turnId) {
+        turn = s.turnId;
+        const impact = s.lastShot?.impact;
+        record.push({ hit: dummy.health < before, miss: impact ? Math.min(400, Math.abs(impact.x - dummy.x)) : 400 });
+        before = dummy.health;
+        dir = -dir;
+      }
+      if (moving && Math.abs(dummy.x - dummy.driveFrom) < FREE_DRIVE && session.submit({ type: 'move', turnId: s.turnId, playerId: 1, dir }).ok) {
+        session.update();
+        continue;
+      }
       session.submit({ type: 'fire', turnId: s.turnId, playerId: 1, angle: 90, power: 0, weaponId: 'tracer' });
     }
     session.update();
@@ -208,9 +220,95 @@ test('an AI that cannot reach its target drives closer', () => {
     session.update();
     fired = session.drainEvents().some((e) => e.type === 'fire');
   }
-  assert.ok(tank.x > startX + 40, `drove from ${startX} to ${tank.x}`);
-  assert.ok(tank.stock.fuel < 300);
+  assert.ok(tank.x > startX + FREE_DRIVE, `drove from ${startX} to ${tank.x}`);
+  assert.ok(tank.stock.fuel < 300, 'using fuel once the free distance ran out');
   assert.ok(fired, 'and then fired');
+});
+
+test('without fuel, an AI still uses its free drive to get closer', () => {
+  const session = new LocalSession({ players: [{ name: 'A', ai: 'cyborg' }, { name: 'B' }], aiFast: true });
+  const game = flatGame({ xs: [100, 1180], settings: { wind: 'off', gravity: 'high' } });
+  session.game = game;
+  session.brain = new Brain(session, { fast: true });
+  const tank = game.state.tanks[0];
+  tank.ai = 'cyborg';
+  let fired = false;
+  for (let i = 0; i < 3000 && !fired; i++) {
+    session.update();
+    fired = session.drainEvents().some((e) => e.type === 'fire');
+  }
+  assert.equal(tank.x, 100 + FREE_DRIVE, 'drove to the end of its free zone');
+  assert.equal(tank.stock.fuel, 0);
+  assert.ok(fired);
+});
+
+test('an AI that a shell just missed scoots away with its free drive, then shoots back', () => {
+  const dodge = PERSONALITIES.cyborg.dodge;
+  PERSONALITIES.cyborg.dodge = 1; // always, for the test
+  try {
+    const session = new LocalSession({ players: [{ name: 'Human' }, { name: 'AI', ai: 'cyborg' }], aiFast: true });
+    const game = flatGame({ xs: [250, 900], settings: { wind: 'off' } });
+    session.game = game;
+    session.brain = new Brain(session, { fast: true, seed: 3 });
+    const ai = game.state.tanks[1];
+    ai.ai = 'cyborg';
+    game.state.tanks[0].stock.tracer = 5;
+    fireAndSettle(game, { angle: 90, power: 150, weaponId: 'tracer' });
+    game.state.lastShot.impact = { x: ai.x - 40, y: 500, tank: -1 }; // a near miss on its left
+    let fired = false;
+    for (let i = 0; i < 3000 && !fired; i++) {
+      session.update();
+      fired = session.drainEvents().some((e) => e.type === 'fire' && e.tank === 1);
+    }
+    assert.ok(ai.x >= 900 + 20, `moved away from the near miss, to ${ai.x}`);
+    assert.ok(ai.x <= 900 + FREE_DRIVE, 'within its free drive');
+    assert.equal(ai.stock.fuel, 0);
+    assert.ok(fired, 'and then fired');
+  } finally {
+    PERSONALITIES.cyborg.dodge = dodge;
+  }
+});
+
+test('an AI never dodges off a cliff', () => {
+  const heights = new Int16Array(WIDTH).fill(400);
+  for (let x = 530; x < WIDTH; x++) heights[x] = HEIGHT - 20; // a sheer drop just to the right
+  const session = new LocalSession({ players: [{ name: 'A' }, { name: 'B' }], aiFast: true });
+  const game = flatGame({ xs: [500, 200], heights, settings: { wind: 'off' } });
+  session.game = game;
+  const tank = game.state.tanks[0];
+  const room = freeRoom(game, tank, 1);
+  assert.ok(room < FREE_DRIVE, `stops short of the edge after ${room} px`);
+  const edge = { ...tank, x: tank.x + room };
+  assert.ok(game.supported(edge), 'still standing on the cliff top there');
+  assert.ok(!game.supported({ ...edge, x: edge.x + 1 }), 'one more pixel and it would fall');
+  assert.equal(freeRoom(game, tank, -1), FREE_DRIVE, 'the other way is clear');
+});
+
+test('once its target moves, an AI has to walk its shots in again', () => {
+  const session = new LocalSession({ players: [{ name: 'A' }, { name: 'B' }], aiFast: true });
+  const game = flatGame({ xs: [300, 1000], settings: { wind: 'off' } });
+  session.game = game;
+  const brain = new Brain(session, { fast: true });
+  const [me, them] = game.state.tanks;
+  me.ai = 'cyborg';
+  const m = brain.mem(me);
+  m.targetId = them.id;
+  m.shotsAtTarget = 5;
+  m.aimedFrom = { x: me.x, targetX: them.x };
+  brain.startPlan(game, me, them);
+  assert.equal(m.shotsAtTarget, 5, 'nothing moved: it keeps its walked-in aim');
+  them.x += FREE_DRIVE;
+  brain.startPlan(game, me, them);
+  assert.equal(m.shotsAtTarget, 0, 'the target moved two tank lengths');
+  assert.equal(aimErrorScale(PERSONALITIES.cyborg, m.shotsAtTarget), 1, 'so its aim is as rough as a first shot');
+});
+
+test('moving two tank lengths each turn throws off even an AI that has zeroed in', () => {
+  const duels = (moving) =>
+    Array.from({ length: 12 }, (_, i) => duel({ level: 'cyborg', wind: [0, 4, 8, 12][i % 4] * (i % 2 ? 1 : -1), seed: 40 + i, shots: 8, moving }).record);
+  const still = hitRate(duels(false));
+  const moving = hitRate(duels(true));
+  assert.ok(moving < still * 0.8, `hit rate ${moving.toFixed(2)} against a moving target vs ${still.toFixed(2)} against a still one`);
 });
 
 test('AI targets by personality: weakest for the Spotter, revenge for the Cyborg', () => {

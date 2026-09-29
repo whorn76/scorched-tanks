@@ -55,6 +55,7 @@ function checkTank(t, i) {
   for (const key of ['dying', 'killer', 'lastHitBy', 'lastDamagedBy', 'moving', 'moveDir', 'burn']) {
     if (typeof t[key] !== 'number' || !Number.isFinite(t[key])) t[key] = key === 'killer' || key.startsWith('last') ? -1 : 0;
   }
+  if (typeof t.driveFrom !== 'number' || !Number.isFinite(t.driveFrom)) t.driveFrom = t.x;
   if (!isWeapon(t.weapon)) t.weapon = 'baby';
   t.name = String(t.name ?? '').slice(0, 16);
   t.color = String(t.color ?? '#ffffff').slice(0, 16);
@@ -75,9 +76,10 @@ export async function loadSnapshot(snap) {
   state.explosions = [];
   state.napalm = [];
   state.deaths = Array.isArray(state.deaths) ? state.deaths.filter((id) => Number.isInteger(id) && id >= 0 && id < state.tanks.length) : [];
-  for (const key of ['round', 'turnId', 'tick', 'quiet', 'quietNeeded', 'nextId', 'roundTurns']) {
+  for (const key of ['round', 'turnId', 'tick', 'quiet', 'quietNeeded', 'nextId', 'roundTurns', 'rotation', 'turnMask']) {
     if (!Number.isInteger(state[key]) || state[key] < 0) state[key] = 0;
   }
+  if (!Number.isInteger(state.volleyTurn) || state.volleyTurn < -1) state.volleyTurn = -1;
   if (!Number.isInteger(state.active) || state.active < -1 || state.active >= state.tanks.length) state.active = 0;
   const windMax = WIND_MAX[sanitizeSettings(state.settings).wind] ?? 0;
   if (!Number.isInteger(state.wind) || Math.abs(state.wind) > windMax) state.wind = 0;

@@ -88,6 +88,131 @@ test('a local game against the AI plays several turns without errors', async () 
   await page.context().close();
 });
 
+test('the top bar opens a weapons & items menu, and every tank can drive two tank lengths a turn', async () => {
+  const page = await openPage(browser, {
+    name: 'menu',
+    storage: {
+      settings: { startCash: 0, rounds: 2, wind: 'off', terrain: 'flat' },
+      lineup: [
+        { name: 'Tester', color: '#e8453c', type: 'human' },
+        { name: 'Gail', color: '#3d8bff', type: 'gunner' },
+      ],
+    },
+  });
+  await page.click('#btn-local');
+  await page.click('#btn-start-local');
+  assert.ok(await waitForMyTurn(page));
+  await page.waitForFunction(() => window.__scorched.session.game.isIdle());
+  const me = await page.evaluate(() => {
+    const t = window.__scorched.session.state.tanks[window.__scorched.app.aim.playerId];
+    Object.assign(t.stock, { missile: 5, shield: 1, battery: 1 });
+    t.health = 60;
+    return { id: t.id, x: t.x };
+  });
+  const tank = () => page.evaluate((id) => {
+    const t = window.__scorched.session.state.tanks[id];
+    return { x: t.x, driveFrom: t.driveFrom, fuel: t.stock.fuel, shield: t.shield, health: t.health };
+  }, me.id);
+  const aim = () => page.evaluate(() => ({ angle: window.__scorched.app.aim.angle, power: window.__scorched.app.aim.power, weapon: window.__scorched.app.aim.weaponId }));
+  // Aim a little first, so we can check that nothing below resets it.
+  await page.keyboard.down('ArrowUp');
+  await page.waitForTimeout(300);
+  await page.keyboard.up('ArrowUp');
+  const aimed = await aim();
+
+  // Click the weapon in the top bar and pick a missile.
+  const box = await page.locator('#game').boundingBox();
+  const k = box.width / 1280;
+  await page.mouse.click(box.x + 680 * k, box.y + 30 * k);
+  await page.waitForSelector('#arsenal-menu');
+  await page.waitForTimeout(250);
+  await page.screenshot({ path: join(SHOTS, 'menu.png') });
+  await page.click('[data-weapon="missile"]');
+  assert.equal((await aim()).weapon, 'missile');
+  assert.equal(await page.locator('#arsenal-menu').count(), 0, 'picking a weapon closes the menu');
+
+  // I opens it too: raise the shield and use the battery.
+  await page.keyboard.press('KeyI');
+  await page.click('[data-use="shield"]');
+  await page.click('[data-use="battery"]');
+  assert.deepEqual((({ shield, health }) => ({ shield, health }))(await tank()), { shield: 60, health: 85 });
+
+  // Hold ▶: no fuel needed for the first two tank lengths, then the button gives out.
+  const right = await page.locator('[data-drive="1"]').boundingBox();
+  await page.mouse.move(right.x + right.width / 2, right.y + right.height / 2);
+  await page.mouse.down();
+  await page.waitForFunction(() => document.querySelector('[data-drive="1"]')?.disabled, null, { timeout: 15000 });
+  await page.mouse.up();
+  await page.waitForFunction(() => window.__scorched.session.game.isIdle());
+  const drove = await tank();
+  assert.equal(drove.fuel, 0);
+  assert.ok(drove.x > me.x + 30 && drove.x <= me.x + 56, `drove from ${me.x} to ${drove.x}`);
+  await page.waitForTimeout(200);
+  await page.screenshot({ path: join(SHOTS, 'menu-drive.png') });
+
+  // Esc closes the menu, and the aim and weapon are just as they were.
+  await page.keyboard.press('Escape');
+  assert.equal(await page.locator('#arsenal-menu').count(), 0);
+  assert.deepEqual(await aim(), { ...aimed, weapon: 'missile' });
+  // Pausing doesn't reset them either.
+  await page.keyboard.press('Escape');
+  await page.click('#pause-menu .btn.primary');
+  assert.deepEqual(await aim(), { ...aimed, weapon: 'missile' });
+
+  await page.keyboard.press('Space');
+  await page.waitForFunction(() => window.__scorched.phase === 'busy' || !window.__scorched.app.aim, null, { timeout: 5000 });
+  assert.equal(await page.evaluate(() => window.__scorched.session.state.lastShot.weaponId), 'missile');
+  assert.deepEqual(page.errors, [], 'no console errors');
+  await page.context().close();
+});
+
+test('sudden death rains shells from the sky', async () => {
+  const page = await openPage(browser, {
+    name: 'sudden',
+    storage: {
+      settings: { startCash: 0, rounds: 1, wind: 'low', suddenDeath: 8 },
+      lineup: [
+        { name: 'Tester', color: '#e8453c', type: 'human' },
+        { name: 'Bot', color: '#3d8bff', type: 'rookie' },
+      ],
+    },
+  });
+  await page.click('#btn-local');
+  await page.click('#btn-start-local');
+  await waitForPhase(page, ['aim', 'busy']);
+  // Skip ahead to the last round of turns before sudden death.
+  await page.evaluate(() => {
+    window.__scorched.session.state.rotation = 8;
+  });
+  let banner = false;
+  let falling = false;
+  const deadline = Date.now() + 90000;
+  while (Date.now() < deadline && !(banner && falling)) {
+    const st = await page.evaluate(() => {
+      const app = window.__scorched.app;
+      const s = window.__scorched.session.state;
+      // Our own shots are harmless tracers straight up.
+      if (app.aim && !app.aim.fired && window.__scorched.session.game.isIdle()) {
+        s.tanks[app.aim.playerId].stock.tracer = 9;
+        Object.assign(app.aim, { weaponId: 'tracer', angle: 90, power: 150 });
+      }
+      return { mine: !!app.aim && !app.aim.fired, banner: !!window.__scorched.renderer.banner, falling: s.projectiles.some((p) => p.sky && p.y > 80), phase: window.__scorched.phase };
+    });
+    if (st.phase === 'roundOver' || st.phase === 'gameOver') break;
+    banner ||= st.banner;
+    if (st.falling && !falling) {
+      falling = true;
+      await page.screenshot({ path: join(SHOTS, 'sudden-death.png') });
+    }
+    if (st.mine) await page.keyboard.press('Space');
+    await page.waitForTimeout(100);
+  }
+  assert.ok(banner, 'sudden death was announced');
+  assert.ok(falling, 'and shells fell from the sky');
+  assert.deepEqual(page.errors, [], 'no console errors');
+  await page.context().close();
+});
+
 test('the phone layout shows touch controls that work', async () => {
   const context = await browser.newContext({ viewport: { width: 844, height: 390 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2 });
   const page = await context.newPage();
@@ -111,6 +236,13 @@ test('the phone layout shows touch controls that work', async () => {
   const after = await page.evaluate(() => window.__scorched.app.aim.power);
   assert.ok(after > before, 'power went up');
   await page.screenshot({ path: join(SHOTS, 'phone.png') });
+  // Tapping the weapon's name opens the weapons & items menu.
+  await page.locator('button.touch-weapon').tap();
+  await page.waitForSelector('#arsenal-menu');
+  await page.waitForTimeout(250);
+  await page.screenshot({ path: join(SHOTS, 'phone-menu.png') });
+  await page.locator('#arsenal-menu .arsenal-close').tap();
+  assert.equal(await page.locator('#arsenal-menu').count(), 0);
   await page.locator('.touch-btn.fire').tap();
   await page.waitForFunction(() => window.__scorched.phase === 'busy', null, { timeout: 5000 });
   assert.deepEqual(errors, []);
