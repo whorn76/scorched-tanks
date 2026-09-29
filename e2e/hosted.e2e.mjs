@@ -18,8 +18,9 @@ test('on a static host the game loads cleanly and does not assume a relay', asyn
   await page.waitForSelector('#title-screen');
   // Packaged like the Pages workflow does it: the game lives under v/<version>/.
   const main = await page.evaluate(() => document.querySelector('script[type=module]').src);
-  assert.match(main, /\/v\/e2e\/src\/main\.js$/);
-  assert.match(await page.textContent('#title-screen .fineprint'), /Version e2e/);
+  const version = /\/v\/([\w.-]+)\/src\/main\.js$/.exec(main)?.[1];
+  assert.ok(version, `the game loads from a versioned folder (${main})`);
+  assert.match(await page.textContent('#title-screen .fineprint'), new RegExp(`Version ${version.slice(0, 7)}`));
   await page.waitForFunction(() => window.__scorched.app.demo?.game?.state.round === 1, null, { timeout: 10000 });
   await page.click('#btn-host');
   await page.check('input[name=transport][value=relay]');
