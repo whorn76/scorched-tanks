@@ -41,6 +41,9 @@ export class Arsenal {
     this.isOpen = true;
     this.tankId = tank.id;
     this.weaponsKey = '';
+    // Items you had when the menu opened keep their rows (as ×0) until it closes, so nothing
+    // jumps around under the pointer when you use the last one.
+    this.listed = new Set(['shield', 'heavyshield', 'battery', 'parachute'].filter((id) => tank.stock[id] > 0 || tank.shieldType === id));
     this.build(tank);
     this.root.hidden = false;
     this.update({ tank, aim, idle: true });
@@ -172,7 +175,8 @@ export class Arsenal {
     for (const [id, row] of this.itemRows) {
       const n = tank.stock[id] ?? 0;
       const up = SHIELDS.includes(id) && tank.shieldType === id && tank.shield > 0;
-      row.el.hidden = n <= 0 && !up;
+      if (n > 0 || up) this.listed.add(id);
+      row.el.hidden = !this.listed.has(id);
       if (row.el.hidden) continue;
       setText(row.count, `×${n}`);
       if (id === 'parachute') continue;

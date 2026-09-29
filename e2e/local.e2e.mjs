@@ -89,13 +89,14 @@ test('a local game against the AI plays several turns without errors', async () 
 });
 
 test('the top bar opens a weapons & items menu, and every tank can drive two tank lengths a turn', async () => {
+  // Two people at one screen: nobody has fired yet, so there are no craters to get stuck in.
   const page = await openPage(browser, {
     name: 'menu',
     storage: {
       settings: { startCash: 0, rounds: 2, wind: 'off', terrain: 'flat' },
       lineup: [
         { name: 'Tester', color: '#e8453c', type: 'human' },
-        { name: 'Gail', color: '#3d8bff', type: 'gunner' },
+        { name: 'Friend', color: '#3d8bff', type: 'human' },
       ],
     },
   });
@@ -136,10 +137,11 @@ test('the top bar opens a weapons & items menu, and every tank can drive two tan
   await page.click('[data-use="shield"]');
   await page.click('[data-use="battery"]');
   assert.deepEqual((({ shield, health }) => ({ shield, health }))(await tank()), { shield: 60, health: 85 });
+  await page.waitForFunction(() => document.querySelector('[data-use="battery"]')?.disabled);
+  assert.equal(await page.locator('[data-item="battery"]').isVisible(), true, 'the used-up battery keeps its row while the menu is open');
 
   // Hold ▶: no fuel needed for the first two tank lengths, then the button gives out.
-  const right = await page.locator('[data-drive="1"]').boundingBox();
-  await page.mouse.move(right.x + right.width / 2, right.y + right.height / 2);
+  await page.locator('[data-drive="1"]').hover();
   await page.mouse.down();
   await page.waitForFunction(() => document.querySelector('[data-drive="1"]')?.disabled, null, { timeout: 15000 });
   await page.mouse.up();
